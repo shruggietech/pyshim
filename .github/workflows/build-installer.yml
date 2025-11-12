@@ -5,9 +5,7 @@ on:
   release:
     types: [published]
 
-concurrency:
-  group: build-installer
-  cancel-in-progress: true
+concurrency: build-installer
 
 jobs:
   build:
