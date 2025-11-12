@@ -68,4 +68,7 @@ Thumbs.db
 
 # pyshim specific
 .pyshim/
+# Exclude .bat files except templates
 *.bat
+!pyshim/templates/*.bat
+!setup.bat
