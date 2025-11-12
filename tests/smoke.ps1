@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
 $SepLine = "`n" + ("-" * 60) + "`n"
-$TotalDurationMax = 12    # seconds
+$TotalDurationMax = 18    # seconds
 $SingleDurationMax = 3    # seconds
 $StartTime = Get-Date
 $TestsFailed = $false
@@ -67,6 +67,104 @@ function Invoke-TimedCommand {
         }
     }
     return $true
+}
+
+function Write-CondaStatus {
+    [CmdletBinding()]
+    Param()
+
+    Write-Host "Inspecting Conda / Miniconda environment:" -ForegroundColor Yellow
+
+    $Candidates = @()
+    if ($env:CONDA_EXE) {
+        $Candidates += $env:CONDA_EXE
+    }
+
+    try {
+        $CommandHit = (Get-Command conda -ErrorAction Stop).Source
+        if ($CommandHit) {
+            $Candidates += $CommandHit
+        }
+    } catch {
+        # ignored on purpose
+    }
+
+    $DefaultUserInstall = Join-Path -Path $env:USERPROFILE -ChildPath 'miniconda3\Scripts\conda.exe'
+    $Candidates += $DefaultUserInstall
+
+    Write-Host "    Running: (Conda detection)" -ForegroundColor Cyan
+    $Candidates = $Candidates | Where-Object { $_ } | Select-Object -Unique
+    if ($Candidates.Count -gt 0) {
+        Write-Host "    Output: Candidate paths -> $(($Candidates -join ', '))" -ForegroundColor Gray
+    } else {
+        Write-Host "    Output: No candidate paths discovered." -ForegroundColor Gray
+    }
+
+    $ResolvedConda = $null
+    foreach ($Candidate in $Candidates) {
+        $ResolvedCandidate = Resolve-Path -LiteralPath $Candidate -ErrorAction SilentlyContinue
+        if ($ResolvedCandidate) {
+            $ResolvedConda = $ResolvedCandidate.ProviderPath
+            break
+        }
+    }
+
+    if (-not $ResolvedConda) {
+        Write-Host "    Result: Conda executable not detected." -ForegroundColor Yellow
+        return
+    }
+
+    Write-Host "    Result: Found conda executable." -ForegroundColor Green
+    #Write-Host "    Output: $ResolvedConda" -ForegroundColor Gray
+
+    Write-Host "    Running: $ResolvedConda --version" -ForegroundColor Cyan
+    $VersionOutput = & $ResolvedConda '--version' 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "    Output: $((($VersionOutput | Out-String).Trim()))" -ForegroundColor Gray
+    } else {
+        Write-Host "    Output: Unable to determine conda version." -ForegroundColor Yellow
+    }
+
+    Write-Host "    Running: $ResolvedConda env list --json" -ForegroundColor Cyan
+    $EnvJsonRaw = & $ResolvedConda 'env' 'list' '--json' 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "    Output: Unable to enumerate conda environments." -ForegroundColor Yellow
+        return
+    }
+
+    try {
+        $EnvInfo = ($EnvJsonRaw | Out-String | ConvertFrom-Json)
+    } catch {
+        Write-Host "    Output: Failed to parse conda environment list." -ForegroundColor Yellow
+        return
+    }
+
+    if (-not $EnvInfo -or -not $EnvInfo.envs) {
+        Write-Host "    Output: No conda environments reported." -ForegroundColor Yellow
+        return
+    }
+
+    $TargetEnvs = 'py310','py311','py312','py313','py314'
+    $EnvSummaries = @()
+    foreach ($Target in $TargetEnvs) {
+        $MatchingPath = $EnvInfo.envs | Where-Object { $_.Split([IO.Path]::DirectorySeparatorChar)[-1].ToLower() -eq $Target }
+        if (-not $MatchingPath) {
+            $EnvSummaries += ('{0}: missing' -f $Target)
+            continue
+        }
+
+        #Write-Host "    Running: $ResolvedConda run -n $Target python -c 'import sys; print(sys.version.split()[0])'" -ForegroundColor Cyan
+        $VersionProbe = & $ResolvedConda 'run' '-n' $Target 'python' '-c' 'import sys; print(sys.version.split()[0])' 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            $EnvSummaries += ('{0}: {1}' -f $Target, (($VersionProbe | Out-String).Trim()))
+        } else {
+            $EnvSummaries += ('{0}: version query failed' -f $Target)
+        }
+    }
+
+    if ($EnvSummaries.Count -gt 0) {
+        Write-Host "    Output: $($EnvSummaries -join ', ')" -ForegroundColor Gray
+    }
 }
 
 #-------------------------------------------------------------------------------
@@ -177,6 +275,10 @@ if (Test-Path -LiteralPath $UncPath -ErrorAction SilentlyContinue) {
 } else {
     Write-Host "    Skipped (UNC path not accessible)" -ForegroundColor Gray
 }
+
+#-------------------------------------------------------------------------------
+$SepLine | Write-Host
+Write-CondaStatus
 
 #-------------------------------------------------------------------------------
 $SepLine | Write-Host

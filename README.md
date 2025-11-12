@@ -87,6 +87,7 @@ When you call `python`, pyshim resolves the appropriate interpreter using this p
 
 - The installer mirrors `Make-Pyshim.ps1`: it copies the shims into `C:\bin\shims` and (optionally) appends that directory to the user PATH.
 - The `Build Installer` GitHub workflow (`.github/workflows/build-installer.yml`) can be triggered manually or by publishing a release. It runs the generator script and, when invoked from a release, uploads the installer as a release asset automatically.
+- Optional add-on: the same workflow copies `tools/Install-CondaPythons.ps1` to the release assets. Running `powershell.exe -ExecutionPolicy Bypass -File .\Install-CondaPythons.ps1` provisions Miniconda environments (`py310`…`py314`) so pyshim has prebuilt interpreters spanning Python 3.10–3.14. Supply `-CondaPath` if your `conda.exe` lives outside `%USERPROFILE%\miniconda3\Scripts`.
 
 ## Usage
 
