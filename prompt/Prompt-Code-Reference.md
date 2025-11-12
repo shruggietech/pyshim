@@ -78,6 +78,18 @@ When you call `python`, pyshim resolves the appropriate interpreter using this p
 
 ---
 
+### Releases & Single-File Installer
+
+- Run `pwsh ./tools/New-PyshimInstaller.ps1` to regenerate `dist/Install-Pyshim.ps1` with the current shims embedded.
+- Attach `dist/Install-Pyshim.ps1` to the GitHub release. End users can install by executing:
+
+   ```powershell
+   powershell.exe -ExecutionPolicy Bypass -File .\Install-Pyshim.ps1 -WritePath
+   ```
+
+- The installer mirrors `Make-Pyshim.ps1`: it copies the shims into `C:\bin\shims` and (optionally) appends that directory to the user PATH.
+- The `Build Installer` GitHub workflow (`.github/workflows/build-installer.yml`) can be triggered manually or by publishing a release. It runs the generator script and, when invoked from a release, uploads the installer as a release asset automatically.
+
 ### Usage
 
 #### Global Interpreter
@@ -343,308 +355,496 @@ yarn-error.log*
 C:\Users\you\miniconda3\envs\myproj\python.exe
 ```
 
+## `.\.github\workflows\build-installer.yml`
+
+```yaml
+name: Build Installer
+
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Generate installer
+        run: ./tools/New-PyshimInstaller.ps1 -Force -OutputPath ./dist/Install-Pyshim.ps1
+
+      - name: Upload installer artifact
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Install-Pyshim.ps1
+          path: dist/Install-Pyshim.ps1
+
+      - name: Attach installer to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/Install-Pyshim.ps1
+```
+
 ## `.\.github\copilot-instructions.md`
 
-This document provides instructions for AI coding agents to effectively assist in developing the pyshim project.
+### Project Snapshot
+- pyshim routes Windows python/pip/pythonw calls via batch shims in `bin/shims` and a PowerShell module to pick the right interpreter.
+- Core pieces: `python.bat` resolver, tiny wrappers (`pip.bat`, `pythonw.bat`), and `pyshim.psm1` cmdlets managing config files.
+### Resolution Chain (bin/shims/python.bat)
+- Priority is fixed: one-shot `--interpreter` → session `PYSHIM_INTERPRETER` → app `python@%PYSHIM_TARGET%.env` → project `.python-version` up the tree → global `python.env` → fallback.
+- Fallback executes `py -3.12`, then `py -3`, then `conda run -n base python`, then the first real `python.exe` outside the shim dir; never add bare `python` or we loop forever.
+- `:RESOLVE_SPEC` parses specs (`py:3.12`, `conda:env`, absolute paths); `:FIND_DOTFILE` walks parents using delayed expansion.
+### Config Surfaces
+- All `.env` and `.python-version` files are single-line ASCII with no trailing newline; editing scripts rely on `for /f "usebackq"`.
+- `python.nopersist` toggles global persistence; guard `PYSHIM_FROM_PY` stops recursive launches when `py.exe` hands control back.
+### PowerShell Module (bin/shims/pyshim.psm1)
+- Cmdlets (`Use-Python`, `Run-WithPython`, etc.) use `[CmdletBinding()]`, explicit `Param()` blocks, PascalCase variables, and write files with `Set-Content -NoNewline -Encoding ASCII -LiteralPath`.
+- Always compute `$Sep = [IO.Path]::DirectorySeparatorChar` before building paths and prefer `Join-Path`; thanks again, Microsoft.
+- Maintain self-awareness variables (`$thisFunctionReference` et al.) for logging when new helpers are introduced.
+### Testing & Verification
+- Smoke test lives in `tests/smoke.ps1`; run `.\tests\smoke.ps1` from repo root when you touch the resolver or module.
+- Manual sanity: `Use-Python -Spec 'py:3.12' -Persist` then `python -V`; use `Run-WithPython` for one-shot checks during debugging.
+### Development Habits
+- Batch files assume delayed expansion and preserve `%ERRORLEVEL%`; never early-exit without `exit /b %ERRORLEVEL%`.
+- Stick to four-space indents, no tabs, no stray whitespace, and keep helper functions alphabetized when you add new ones.
+- New scripts inherit the comment-based help structure shown in the module; keep examples real by using existing commands.
+### Voice & Tone
+- Write like a human who has seen things: short sentences, natural contractions, no boilerplate transitions.
+- Sprinkle dry sarcasm at Microsoft tooling when it fits; avoid generic pep-talks or AI-scented phrasing.
+### Quick References
+- Shim dir is hard-coded `C:\bin\shims`; keep paths literal and quote anything user-controlled.
+- Keep the repo ASCII unless the pre-existing file already goes Unicode.
+- Default Python on the box is 3.12.10; confirm interpreter specs align with that reality.
+- If you spot untracked changes you didn't make, stop and ask before touching them.
+### When In Doubt
+- Prefer tool-specific helpers (PowerShell cmdlets, batch subroutines) over inventing new workflows, and document any new CLI entrypoint.
+- Ask for clarification if interpreter resolution, persistence flags, or path rules seem underspecified.
 
-### Project Overview: pyshim
-
-**pyshim** is a deterministic, context-aware Python shim system for Windows that intercepts `python`, `pip`, and `pythonw` calls to route them to the correct interpreter based on context. The system consists of three core components:
-
-1. **Batch Shims** (`python.bat`, `pip.bat`, `pythonw.bat`) — Entry points that resolve interpreter specs through a priority chain and delegate to the actual interpreter
-2. **PowerShell Module** (`pyshim.psm1`) — User-facing cmdlets for managing interpreter selection and persistence
-3. **Config Files** (`python.env`, `python@AppName.env`, `.python-version`) — Text files storing interpreter specifications
-
-#### Architecture & Resolution Priority
-
-When `python.bat` is invoked, it resolves the interpreter using this exact priority chain:
-
-1. **One-shot flag**: `--interpreter "SPEC" --` (used by `Run-WithPython` and direct invocation)
-2. **Session variable**: `$env:PYSHIM_INTERPRETER` (set by `Use-Python` without `-Persist`)
-3. **App-target override**: `python@%PYSHIM_TARGET%.env` (set by `Set-AppPython`)
-4. **Project pin**: `.python-version` file in current directory or parent chain (walks up directory tree)
-5. **Global persistence**: `python.env` (unless `python.nopersist` marker exists)
-6. **Fallback chain**: `py -3.12` → `py -3` → `conda run -n base python` → real `python.exe` (not in shim dir) → (error if none found)
-
-**Important**: The fallback chain avoids infinite recursion by:
-
-- Using `PYSHIM_FROM_PY` guard variable when called from `py.bat`
-- Skipping `python.exe` results that point to the shim directory itself
-- Using explicit commands (`py.exe`, `conda`, absolute paths) rather than bare `python`
-
-#### Interpreter Spec Formats
-
-The system supports three spec formats (stored in `.env` and `.python-version` files):
-
-- `py:3.12` — Uses Windows `py` launcher with specific version
-- `conda:envname` — Uses Conda environment
-- `C:\Path\to\python.exe` — Absolute path to interpreter binary
-
-These specs are parsed by the `:RESOLVE_SPEC` subroutine in `python.bat` (lines 91-115).
-
-#### Key Files & Their Roles
-
-- **`python.bat`** (~137 lines): Core resolver logic with batch subroutines `:RESOLVE_SPEC` and `:FIND_DOTFILE` (walks directory tree for `.python-version`)
-- **`pip.bat`** (4 lines): Trivial wrapper that calls `python.bat -m pip`
-- **`pythonw.bat`** (4 lines): Best-effort headless wrapper (delegates to `python.bat`)
-- **`pyshim.psm1`** (124 lines): PowerShell module with cmdlets `Use-Python`, `Disable-PythonPersistence`, `Enable-PythonPersistence`, `Set-AppPython`, `Run-WithPython`
-- **`tests/smoke.ps1`**: Basic smoke test verifying `python -V`, `pip --version`, and `Run-WithPython`
-
-**Note**: `py.bat` is NOT included — the shim relies on the native Windows Python Launcher (`py.exe`) being installed globally.
-
-#### Critical Implementation Details
-
-**Batch File Constraints**:
-
-- Uses `ENABLEDELAYEDEXPANSION` for variable expansion in loops
-- Subroutines use `call :LABEL` pattern with output variables passed by name (e.g., `call :RESOLVE_SPEC "%SPEC%" RESOLVED_CMD`)
-- `:FIND_DOTFILE` implements parent directory walking using `%%~dpD` to extract parent paths
-- Exit codes must be preserved with `exit /b %ERRORLEVEL%`
-- **Critical**: Final fallback uses `py` (not `python`) to prevent infinite recursion since `python.bat` IS the `python` command in PATH
-
-**PowerShell Module Design**:
-
-- All cmdlets use `[CmdletBinding()]` with no parameters (lightweight functions)
-- File operations use `-LiteralPath` for whitespace-safe handling
-- Files written with `-NoNewline -Encoding ASCII` to avoid trailing newlines and BOM issues
-- Hardcoded shim directory: `C:\bin\shims` (not parameterized — design choice for simplicity)
-
-**File Format Discipline**:
-
-- All `.env` files contain a single line with no trailing newline (enforced by `Set-Content -NoNewline`)
-- Parsed with `for /f "usebackq delims="` in batch to preserve exact content
-- `.python-version` files follow same single-line format
-
-#### Development Workflows
-
-**Testing Changes**:
+## `.\dist\Install-Pyshim.ps1`
 
 ```powershell
-## Run smoke test to verify basic functionality
-.\tests\smoke.ps1
+<#
+.SYNOPSIS
+    Single-file installer that provisions pyshim shims to the local machine.
+.DESCRIPTION
+    Unpacks an embedded archive containing the pyshim batch shims and PowerShell
+    module, then mirrors the behaviour of Make-Pyshim.ps1: copies the payload to
+    C:\bin\shims (creating the directory when needed) and optionally appends
+    that directory to the user PATH.
 
-## Manual verification of resolution priority
-Use-Python -Spec 'py:3.12' -Persist
-python -V
-```
+    The embedded archive is generated from the repository's bin/shims directory
+    using tools/New-PyshimInstaller.ps1. Re-run that tool whenever the shims
+    change to refresh this installer before publishing a release asset.
+.PARAMETER WritePath
+    Automatically append C:\bin\shims to the user PATH when it is missing. If
+    omitted the script prompts the user.
+.PARAMETER Help
+    Display the full help text for this script.
+.EXAMPLE
+    powershell.exe -ExecutionPolicy Bypass -File .\Install-Pyshim.ps1 -WritePath
 
-**Adding New Cmdlets**:
+    Installs pyshim and ensures the user PATH contains C:\bin\shims.
+#>
+[CmdletBinding(SupportsShouldProcess=$true,ConfirmImpact='None',DefaultParameterSetName='Default')]
+Param(
+    [Parameter(Mandatory=$false,ParameterSetName='Default')]
+    [Alias('Path','P')]
+    [Switch]$WritePath,
 
-- Follow existing pattern in `pyshim.psm1`
-- Include full comment-based help with `.SYNOPSIS`, `.DESCRIPTION`, `.PARAMETER`, `.EXAMPLE`
-- Use `$ShimDir = 'C:\bin\shims'` for path construction
-- File writes should use `-NoNewline -Encoding ASCII`
+    [Parameter(Mandatory=$true,ParameterSetName='HelpText')]
+    [Alias('h')]
+    [Switch]$Help
+)
 
-**Modifying Resolution Logic**:
+if ($Help -or ($PSCmdlet.ParameterSetName -eq 'HelpText')) {
+    Get-Help -Name $MyInvocation.MyCommand.Path -Full
+    exit 0
+}
 
-- Changes to priority chain happen in `python.bat` (lines 10-88)
-- Spec parsing logic lives in `:RESOLVE_SPEC` subroutine (lines 91-115)
-- Always preserve `%ERRORLEVEL%` when delegating to resolved interpreter
+$EmbeddedArchive = @'
+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
+DAAAAAA=
+'@
 
-#### Common Pitfalls
+Add-Type -AssemblyName System.IO.Compression.FileSystem
 
-- **Trailing Newlines**: Config files MUST NOT have trailing newlines (breaks batch parsing)
-- **Path Separators**: Use `Join-Path` in PowerShell; avoid hardcoded `\` for potential Linux compatibility
-- **Delayed Expansion**: Required in batch for variable mutation in loops/conditionals
-- **Case Sensitivity**: Batch is case-insensitive, but `.python-version` filename is lowercase by convention (matching `pyenv`)
-- **Infinite Recursion**: Never use bare `python` in fallback chain — `python.bat` IS the `python` command, so it would call itself. Always use `py.exe` or absolute paths in fallbacks
+function Add-PyshimPathEntry {
+    Param(
+        [Parameter(Mandatory=$true)]
+        [System.String]$TargetPath,
 
-#### Design Philosophy
+        [Parameter(Mandatory=$true)]
+        [System.String]$CurrentUserPath
+    )
 
-pyshim prioritizes **determinism** and **zero-configuration** over flexibility:
+    $SplitPaths = @()
+    if ($CurrentUserPath) {
+        $SplitPaths = $CurrentUserPath -split ';'
+    }
 
-- No installer required — just copy files and update PATH
-- Hardcoded paths (`C:\bin\shims`) for predictability
-- Minimal dependencies (PowerShell 5.1+, Windows batch)
-- Spec files use simple text format (no JSON/YAML parsing overhead)
-- Global state is explicit (`.env` files in shim directory, not registry or AppData)
+    if (-not ($SplitPaths | Where-Object { $_.TrimEnd('\\') -ieq $TargetPath.TrimEnd('\\') })) {
+        $SplitPaths = @($SplitPaths | Where-Object { $_ }) + $TargetPath
+    }
 
-### Standards for Writing Style and Tone
+    return ($SplitPaths | Where-Object { $_ }) -join ';'
+}
 
-- Always write in a way that reads as genuinely human and free from any linguistic patterns that commonly expose AI-generated text. Avoid all "AI tells," including but not limited to: excessive politeness, generic transitions (e.g., "Furthermore," "In conclusion," "Overall"), filler phrases ("It's important to note that"), parallel-sounding constructions ("not only...but also"), and overly balanced or neatly summarized conclusions.
-- Favor a natural flow that mirrors how an experienced writer or professional would actually communicate:
-  - Use sentence length variation (occasional fragments are fine).
-  - Use contractions naturally ("I'm," "don't," "that's").
-  - Avoid corporate buzzwords and inflated adjectives unless context demands them.
-  - Use clarity, subtle rhythm, and precision over "niceness."
-  - Never overexplain or restate points unless it aids comprehension.
-  - Eliminate template phrasing like "Here's a breakdown," "Let's explore," or "This means that."
-- The tone should sound authentic, thoughtful, and intentional, not algorithmically tidy. Write as if the content were edited by a sharp human who values brevity, rhythm, and nuance more than structure or formality.
-- Use a little bit of sarcasm or dry humor where appropriate and have fun talking trash about tools and frameworks developed by Microsoft (they deserve it).
+function Get-PyshimPathScopes {
+    Param()
 
-### System Environment Handling
+    return [PSCustomObject]@{
+        Process = $env:Path
+        User    = [Environment]::GetEnvironmentVariable('Path','User')
+        Machine = [Environment]::GetEnvironmentVariable('Path','Machine')
+    }
+}
 
-#### Sensitivity to File and Directory Names
+function Test-PyshimPathPresence {
+    Param(
+        [Parameter(Mandatory=$true)]
+        [System.String]$TargetPath,
 
-While this project is likely to be developed in a Windows 11 environment, it should be assumed that some (or all) of the code may be run in an Ubuntu Linux production environment. Windows file paths are case-insensitive, while Linux file paths use a much more robust case-sensitive approach. As such, when writing scripts that interact with the filesystem, care must be taken to ensure that file and directory names are treated in a universally compatible manner at all times. In addition to the matter of case sensitivity, Windows file systems use (for some unknowable reason) a `\` (backslash "escape") separator character, while Linux file systems use a `/` (forward slash) separator. So while it would be convenient to treat all paths like Internet URLs like Linux, when writing scripts that interact with the filesystem, care must be taken to ensure that file and directory paths are constructed and parsed correctly for the target operating system (thanks to Microsoft).
+        [Parameter(Mandatory=$true)]
+        [System.String[]]$Scopes
+    )
 
-In Powershell, use a standard discovery method to determine the appropriate path separator for the current operating system and store that separator in a variable: `$Sep` (adapt this method for other scripting languages as needed):
+    foreach ($Scope in $Scopes) {
+        if (-not $Scope) {
+            continue
+        }
 
-```powershell
-$Sep = [IO.Path]::DirectorySeparatorChar
-```
-
-File and directory names should avoid spaces where possible. However, scripts must always account for cases where whitespace exists. When handling paths or user inputs in PowerShell, use the `-LiteralPath` parameter where supported (instead of the intuitive but ill-advised `-Path` parameter). Always verify the compatibility of the `-LiteralPath` parameter with each cmdlet to prevent errors when processing path references, as some cmdlets do NOT support `-LiteralPath`.
-
-On a side note, one of the original creators of PowerShell publicly complained about the broken state of the `-Path` parameter and its inconsistent handling of special characters. So (as is the case with all dumpster fire code written by Microsoft) this is a known fundamental bad-practice end-user pain point that Microsoft just simply ignores (okay I'm good now - moving on).
-
-#### Python Versioning and Management
-
-- The system-wide Python installation is exactly version `3.12.10`. This should be taken into account when writing or updating scripts that may interact with the Python installation or its packages.
-- Whenever possible, try to use virtual environments for Python projects to avoid dependency conflicts and ensure consistent behavior across different development and production environments.
-- Consider using python-poetry.org for managing Python project dependencies and virtual environments.
-- If Poetry is not installed, it can be installed using one of the following commands:
-
-  Install Poetry on Windows 11 (Powershell):
-
-  ```powershell
-  (Invoke-WebRequest -Uri https://install.python-poetry.org -UseBasicParsing).Content | py -
-  ```
-
-  Install Poetry on Ubuntu Linux (Bash):
-
-  ```bash
-  curl -sSL https://install.python-poetry.org | python3 -
-  ```
-
-  Note: You may need to also set up your system PATH to include Poetry's bin directory. Refer to the official Poetry documentation for guidance.
-- Python is another dumpster fire situation. Backwards compatibility is a nightmare, and the ecosystem is riddled with poorly maintained packages and security vulnerabilities, and almost every project prides itself on reinventing the wheel. Always expect the worst and check the maintenance status of any third-party libraries before including them in a project, and only include well-established, actively maintained packages AT ALL TIMES.
-
-### General Code Formatting
-
-- **Nested Helper Functions:** For complex functions, break down logic into smaller, single-purpose nested helper functions. These helpers should follow a `ParentFunctionName-HelperAction` naming convention (e.g., `ApkExtract-ResolvePath`).
-- **Variable Naming Convention:** All variables should use **PascalCase** (e.g., `$NumbersCount`, `$InputFile`, `$ExitCode`). Do not use snake_case or camelCase unless absolutely necessary (like conformance with existing third-party code).
-- **Clean Whitespace:**
-  - Never include a line that contains only whitespace characters. If a blank line is needed for readability, it must be completely empty.
-  - Never leave trailing whitespace at the end of any line.
-  - Always leave a single blank line between major logical sections of code (e.g., between function declarations)
-  - Never indent code using tab characters. Always use exactly **four spaces** for each level of indentation.
-
-- **Brace Style (One True Brace Style):** When declaring functions, `if` statements, loops, or any other code block, the opening curly brace `{` **must** be on the same line as the declaration. The closing curly brace `}` **must** be on its own line, aligned with the start of the declaration.
-
-    ```powershell
-    # Correct
-    function Get-Something {
-        if ($Condition) {
-            # Do work
+        $Entries = $Scope -split ';'
+        if ($Entries | Where-Object { $_.TrimEnd('\\') -ieq $TargetPath.TrimEnd('\\') }) {
+            return $true
         }
     }
 
-    # Incorrect
-    function Get-Something
-    {
-        # ...
+    return $false
+}
+
+function Expand-PyshimArchive {
+    Param(
+        [Parameter(Mandatory=$true)]
+        [System.String]$DestinationPath
+    )
+
+    $Bytes = [Convert]::FromBase64String($EmbeddedArchive)
+    $ZipPath = [IO.Path]::GetTempFileName()
+    try {
+        [IO.File]::WriteAllBytes($ZipPath,$Bytes)
+        [IO.Compression.ZipFile]::ExtractToDirectory($ZipPath,$DestinationPath,$true)
+    } finally {
+        if (Test-Path -LiteralPath $ZipPath) {
+            Remove-Item -LiteralPath $ZipPath -Force -ErrorAction SilentlyContinue
+        }
     }
-    ```
+}
 
-### Scripting Standards (Powershell Focused)
+$ShimDir = 'C:\bin\shims'
+$WorkingRoot = Join-Path -Path ([IO.Path]::GetTempPath()) -ChildPath ("pyshim_" + [Guid]::NewGuid().ToString('N'))
+$Null = New-Item -ItemType Directory -Path $WorkingRoot -Force
 
-All non-Powershell scripts should include an appropriate shebang line at the top of the file:
+try {
+    Expand-PyshimArchive -DestinationPath $WorkingRoot
+    $PayloadSource = $WorkingRoot
 
-- Bash: `#!/usr/bin/env bash`
-- Python: `#!/usr/bin/env python3`
-- Node.js: `#!/usr/bin/env node`
-- etc.
+    if (-not (Test-Path -LiteralPath $ShimDir)) {
+        if ($PSCmdlet.ShouldProcess($ShimDir,'Create shim directory')) {
+            New-Item -ItemType Directory -Path $ShimDir -Force | Out-Null
+        }
+    }
 
-Important Note: Never include a shebang line in Powershell scripts. Doing so will prevent the script from behaving correctly in Windows environments.
+    if ($PSCmdlet.ShouldProcess($ShimDir,'Copy embedded shims')) {
+        Copy-Item -Path (Join-Path -Path $PayloadSource -ChildPath '*') -Destination $ShimDir -Recurse -Force
+    }
+} finally {
+    if (Test-Path -LiteralPath $WorkingRoot) {
+        Remove-Item -LiteralPath $WorkingRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
 
-All scripts and functions should closely adhere to the following general structure:
+$PathScopes = Get-PyshimPathScopes
+$AllScopes = @($PathScopes.Process,$PathScopes.User,$PathScopes.Machine)
+$PathPresent = Test-PyshimPathPresence -TargetPath $ShimDir -Scopes $AllScopes
 
-1. Introduction
-    - **Comprehensive ReadMe:** Comprehensive comment-based Help Text documentation
-    - **`[CmdletBinding()]` Declaration:** (Powershell only)
-    - **`Param()` Block:** Define all input parameters (Powershell only)
-2. Declarations
-    - **Function Declarations:** Function and sub-function declarations in alphabetical order
-    - **Variable & Array Declarations:** Variable and array declarations, including self-awareness variables (be sure to carefully sequence these correctly to avoid dependency issues when initializing variables that depend on other locally declared variables)
-3. Core Logic
-    - **Catch Help Text Requests:** Display the help text and gracefully exit if the `-Help` parameter is specified
-    - **Validate Inputs:** Validate user inputs or required environment variables if necessary
-    - **Main Process Logic:** The core logic of the script or function, broken down into logical sections with clear comments explaining each part
-4. Conclusion
-    - **Return Output:** Return outputs to the stdout stream and/or write require output files as needed
-    - **Garbage Collection:** Clean up any temporary files or resources used during execution
-    - **Exit Gracefully:** Exit with an appropriate exit code indicating success or failure (depending on the language, this may be implicit)
+if ($PathPresent) {
+    Write-Host "C:\bin\shims already present in PATH." -ForegroundColor Green
+    exit 0
+}
 
-#### Comprehensive ReadMe
+$ShouldWritePath = $false
+if ($WritePath) {
+    $ShouldWritePath = $true
+} else {
+    $Response = Read-Host "Add 'C:\bin\shims' to your user PATH? [y/N]"
+    if ($Response -and ($Response.Trim() -match '^(y|yes)$')) {
+        $ShouldWritePath = $true
+    }
+}
 
-Example comment-based help block for Powershell:
+if ($ShouldWritePath) {
+    if ($PSCmdlet.ShouldProcess('User PATH','Append shim directory')) {
+        $NewUserPath = Add-PyshimPathEntry -TargetPath $ShimDir -CurrentUserPath $PathScopes.User
+        [Environment]::SetEnvironmentVariable('Path',$NewUserPath,'User')
+        $EnvEntries = $env:Path -split ';'
+        if (-not ($EnvEntries | Where-Object { $_.TrimEnd('\\') -ieq $ShimDir.TrimEnd('\\') })) {
+            $env:Path = ($EnvEntries + $ShimDir | Where-Object { $_ }) -join ';'
+        }
+        Write-Host "Added 'C:\bin\shims' to the user PATH. Restart existing shells." -ForegroundColor Green
+    }
+    exit 0
+} else {
+    Write-Host "Skipped PATH update. To add it later run:" -ForegroundColor Yellow
+    Write-Host "    [Environment]::SetEnvironmentVariable('Path',( '{0};' + [Environment]::GetEnvironmentVariable('Path','User')).Trim(';'),'User')" -f $ShimDir
+    exit 0
+}
+```
 
-```text
+## `.\tools\Install-Pyshim.template.ps1`
+
+```powershell
 <#
 .SYNOPSIS
-    A brief summary of the function's purpose.
+    Single-file installer that provisions pyshim shims to the local machine.
 .DESCRIPTION
-    A more detailed description of what the function does, how it behaves, and the kinds of inputs and outputs it handles.
-.PARAMETER ParameterName
-    A clear explanation of what this parameter is for along with any constraints or special behaviors.
+    Unpacks an embedded archive containing the pyshim batch shims and PowerShell
+    module, then mirrors the behaviour of Make-Pyshim.ps1: copies the payload to
+    C:\bin\shims (creating the directory when needed) and optionally appends
+    that directory to the user PATH.
+
+    The embedded archive is generated from the repository's bin/shims directory
+    using tools/New-PyshimInstaller.ps1. Re-run that tool whenever the shims
+    change to refresh this installer before publishing a release asset.
+.PARAMETER WritePath
+    Automatically append C:\bin\shims to the user PATH when it is missing. If
+    omitted the script prompts the user.
+.PARAMETER Help
+    Display the full help text for this script.
 .EXAMPLE
-    A practical example of how to use the function.
-.LINK
-    [example.com](https://example.com/)
+    powershell.exe -ExecutionPolicy Bypass -File .\Install-Pyshim.ps1 -WritePath
+
+    Installs pyshim and ensures the user PATH contains C:\bin\shims.
 #>
-```
-
-- When writing any Powershell script (or function or sub-function), always include a full comment-based help block at the very beginning of the file and before the internal logic of each function.
-- At a minimum, in Powershell, this block must include `.SYNOPSIS`, `.DESCRIPTION`, `.PARAMETER` for each parameter, and at least one `.EXAMPLE`. Include a `.LINK` for external references where applicable.
-- Relevant help text should be included in non-Powershell scripts as well (using appropriate interactive features and appropriate comment syntax).
-
-#### CmdletBinding (Powershell)
-
-Example `[CmdletBinding()]` declaration:
-
-```powershell
 [CmdletBinding(SupportsShouldProcess=$true,ConfirmImpact='None',DefaultParameterSetName='Default')]
-```
-
-When writing PowerShell functions and scripts, always include a proper `[CmdletBinding()]` declaration directly following the comment-based help text. This ensures that the function behaves like a standard cmdlet, supporting common features like `-Verbose`, `-Debug`, and `-ErrorAction`.
-
-- Avoid using empty whitespace inside the parentheses of `CmdletBinding()`. This line is already quite long, so keep it tight.
-- If the function performs actions that change system state (e.g., file operations), consider including `SupportsShouldProcess=$true` in the declaration.
-- Include `ConfirmImpact='None'` unless the function performs high-impact actions (who knows whatever that means).
-- Always specify a `DefaultParameterSetName='Default'` to ensure predictable behavior regardless of how many parameter sets are defined.
-- Additional attributes can be included if doing so would facilitate the function's specific needs and assumed use-cases (such as handling of pipeline inputs, etc). Make sure to understand the implications of each attribute before including it as these can completely break an entire script or function if misused.
-
-#### Param Block (Powershell)
-
-Define all parameters within a `Param()` block immediately following the `[CmdletBinding()]` declaration. This ensures standard cmdlet behavior. Be sure to leave a blank line between each clump of attributes related to a single parameter for readability.
-
-Example `Param()` block:
-
-```powershell
 Param(
-    [Parameter(Mandatory=$true,ParameterSetName='Default')]
-    [Alias("f")]
-    [System.String]$File,
-
     [Parameter(Mandatory=$false,ParameterSetName='Default')]
-    [Alias("o","outfile")]
-    [System.String]$Output = "ProjectOutput.txt",
+    [Alias('Path','P')]
+    [Switch]$WritePath,
 
     [Parameter(Mandatory=$true,ParameterSetName='HelpText')]
-    [Alias("h")]
+    [Alias('h')]
     [Switch]$Help
 )
-```
 
-- **Named Parameter Groups:** Organize parameters into logical groups using the `ParameterSetName` attribute. This helps clarify which parameters can be used together and improves usability and discoverability from within the standard Help Text generator.
-- **Parameter Attributes:** Use attributes like `[Parameter(Mandatory=$true)]` to enforce required parameters within the context of named parameter groups. The Help text parameter (`-Help`) should always inhabit a `HelpText` parameter group and be mandatory within that group.
-- **Parameter Aliases:** Provide common, best-practice aliases for parameters to improve usability (e.g., `[Alias("f","file","inputfile")]`) but carefully avoid overly generic aliases that could conflict with other parameters. Conflicts in parameter names and aliases should be strongly avoided. Always remember that parameters are case-insensitive in PowerShell
-  - Example: Including both `-File` and `-file` aliases would break the script or function.
-- **Type Constraints:** Strongly type all parameters (e.g., `[System.String]`, `[System.Boolean]`, `[Switch]`).
-- **Default Values:** If an input has a highly-likely default value, assign default values to optional parameters directly in the `Param()` block (e.g., `$Verbosity = $true`) and avoid assigning defaults to mandatory parameters (as this angers the syntax parsers in Visual Studio).
+if ($Help -or ($PSCmdlet.ParameterSetName -eq 'HelpText')) {
+    Get-Help -Name $MyInvocation.MyCommand.Path -Full
+    exit 0
+}
 
-#### Self-Awareness Variables
+$EmbeddedArchive = @'
+__PYSHIM_EMBEDDED_ARCHIVE__
+'@
 
-For effective logging and verbosity, functions and scripts should all declare "self-awareness" variables at the beginning to establish a caller reference string. This is especially important for nested functions to create a logical call stack.
+Add-Type -AssemblyName System.IO.Compression.FileSystem
 
-Example self-awareness variable declarations:
+function Add-PyshimPathEntry {
+    Param(
+        [Parameter(Mandatory=$true)]
+        [System.String]$TargetPath,
 
-```powershell
-## Internal self-awareness variables for use in verbosity and logging
-$thisFunctionReference = "{0}" -f $MyInvocation.MyCommand
-$thisSubFunction = "{0}" -f $MyInvocation.MyCommand
-$thisFunction = if ($null -eq $thisFunction) { $thisSubFunction } else { -join("$thisFunction", ":", "$thisSubFunction") }
+        [Parameter(Mandatory=$true)]
+        [System.String]$CurrentUserPath
+    )
+
+    $SplitPaths = @()
+    if ($CurrentUserPath) {
+        $SplitPaths = $CurrentUserPath -split ';'
+    }
+
+    if (-not ($SplitPaths | Where-Object { $_.TrimEnd('\\') -ieq $TargetPath.TrimEnd('\\') })) {
+        $SplitPaths = @($SplitPaths | Where-Object { $_ }) + $TargetPath
+    }
+
+    return ($SplitPaths | Where-Object { $_ }) -join ';'
+}
+
+function Get-PyshimPathScopes {
+    Param()
+
+    return [PSCustomObject]@{
+        Process = $env:Path
+        User    = [Environment]::GetEnvironmentVariable('Path','User')
+        Machine = [Environment]::GetEnvironmentVariable('Path','Machine')
+    }
+}
+
+function Test-PyshimPathPresence {
+    Param(
+        [Parameter(Mandatory=$true)]
+        [System.String]$TargetPath,
+
+        [Parameter(Mandatory=$true)]
+        [System.String[]]$Scopes
+    )
+
+    foreach ($Scope in $Scopes) {
+        if (-not $Scope) {
+            continue
+        }
+
+        $Entries = $Scope -split ';'
+        if ($Entries | Where-Object { $_.TrimEnd('\\') -ieq $TargetPath.TrimEnd('\\') }) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
+function Expand-PyshimArchive {
+    Param(
+        [Parameter(Mandatory=$true)]
+        [System.String]$DestinationPath
+    )
+
+    $Bytes = [Convert]::FromBase64String($EmbeddedArchive)
+    $ZipPath = [IO.Path]::GetTempFileName()
+    try {
+        [IO.File]::WriteAllBytes($ZipPath,$Bytes)
+        [IO.Compression.ZipFile]::ExtractToDirectory($ZipPath,$DestinationPath,$true)
+    } finally {
+        if (Test-Path -LiteralPath $ZipPath) {
+            Remove-Item -LiteralPath $ZipPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+$ShimDir = 'C:\bin\shims'
+$WorkingRoot = Join-Path -Path ([IO.Path]::GetTempPath()) -ChildPath ("pyshim_" + [Guid]::NewGuid().ToString('N'))
+$Null = New-Item -ItemType Directory -Path $WorkingRoot -Force
+
+try {
+    Expand-PyshimArchive -DestinationPath $WorkingRoot
+    $PayloadSource = $WorkingRoot
+
+    if (-not (Test-Path -LiteralPath $ShimDir)) {
+        if ($PSCmdlet.ShouldProcess($ShimDir,'Create shim directory')) {
+            New-Item -ItemType Directory -Path $ShimDir -Force | Out-Null
+        }
+    }
+
+    if ($PSCmdlet.ShouldProcess($ShimDir,'Copy embedded shims')) {
+        Copy-Item -Path (Join-Path -Path $PayloadSource -ChildPath '*') -Destination $ShimDir -Recurse -Force
+    }
+} finally {
+    if (Test-Path -LiteralPath $WorkingRoot) {
+        Remove-Item -LiteralPath $WorkingRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+$PathScopes = Get-PyshimPathScopes
+$AllScopes = @($PathScopes.Process,$PathScopes.User,$PathScopes.Machine)
+$PathPresent = Test-PyshimPathPresence -TargetPath $ShimDir -Scopes $AllScopes
+
+if ($PathPresent) {
+    Write-Host "C:\bin\shims already present in PATH." -ForegroundColor Green
+    exit 0
+}
+
+$ShouldWritePath = $false
+if ($WritePath) {
+    $ShouldWritePath = $true
+} else {
+    $Response = Read-Host "Add 'C:\bin\shims' to your user PATH? [y/N]"
+    if ($Response -and ($Response.Trim() -match '^(y|yes)$')) {
+        $ShouldWritePath = $true
+    }
+}
+
+if ($ShouldWritePath) {
+    if ($PSCmdlet.ShouldProcess('User PATH','Append shim directory')) {
+        $NewUserPath = Add-PyshimPathEntry -TargetPath $ShimDir -CurrentUserPath $PathScopes.User
+        [Environment]::SetEnvironmentVariable('Path',$NewUserPath,'User')
+        $EnvEntries = $env:Path -split ';'
+        if (-not ($EnvEntries | Where-Object { $_.TrimEnd('\\') -ieq $ShimDir.TrimEnd('\\') })) {
+            $env:Path = ($EnvEntries + $ShimDir | Where-Object { $_ }) -join ';'
+        }
+        Write-Host "Added 'C:\bin\shims' to the user PATH. Restart existing shells." -ForegroundColor Green
+    }
+    exit 0
+} else {
+    Write-Host "Skipped PATH update. To add it later run:" -ForegroundColor Yellow
+    Write-Host "    [Environment]::SetEnvironmentVariable('Path',( '{0};' + [Environment]::GetEnvironmentVariable('Path','User')).Trim(';'),'User')" -f $ShimDir
+    exit 0
+}
 ```
 
 ## `.\prompt\Make-PromptCodeReference.ps1`
@@ -816,9 +1016,14 @@ $SyntaxMap = @{
 Write-Host "Generating Prompt Code Reference from project root files..." -ForegroundColor Green
 Write-Host "  Target directory: $(Resolve-Path -LiteralPath $ProjectRoot)" -ForegroundColor Cyan
 
-# Delete existing output file if it exists to prevent it from being included in processing
-if (Test-Path -LiteralPath $OutputFile) {
-    Remove-Item -LiteralPath $OutputFile -Force -ErrorAction SilentlyContinue
+# Purge any existing prompt artifacts before generating new output
+$CleanupPattern = 'Prompt-Code-Reference*'
+$ExistingArtifacts = Get-ChildItem -LiteralPath $PSScriptRoot -Filter $CleanupPattern -File -ErrorAction SilentlyContinue
+if ($ExistingArtifacts) {
+    Write-Host "  Removing $($ExistingArtifacts.Count) existing prompt artifact(s)..." -ForegroundColor Yellow
+    foreach ($Artifact in $ExistingArtifacts) {
+        Remove-Item -LiteralPath $Artifact.FullName -Force -ErrorAction SilentlyContinue
+    }
 }
 
 # Get all files from project root (recursive if -Recurse specified)
@@ -1009,6 +1214,257 @@ try {
 catch {
     Write-Error "Failed to write output file: $_"
     exit 1
+}
+```
+
+## `.\bin\Make-Pyshim.ps1`
+
+```powershell
+<#
+.SYNOPSIS
+    Install the pyshim shims and optionally wire them into the user PATH.
+.DESCRIPTION
+    Copies all files from the repository shim folder (`bin/shims`) into the
+    fixed installation directory (`C:\bin\shims`). Existing files are
+    overwritten. If the target directory does not exist it is created.
+
+    After copying, the script validates whether `C:\bin\shims` already lives
+    in the effective PATH (process, user, or machine scopes). If the entry is
+    missing you can either supply `-WritePath` up front or respond to the
+    interactive prompt to append it to the user PATH. Refusing the update
+    prints the manual command you need to run yourself.
+.PARAMETER WritePath
+    Automatically append `C:\bin\shims` to the user PATH when it is missing.
+    Without this switch the script will prompt for confirmation.
+.PARAMETER Help
+    Display the full help text for this script.
+.EXAMPLE
+    .\Make-Pyshim.ps1 -WritePath
+
+    Copies the shims into place and appends `C:\bin\shims` to the user PATH if
+    it is not already present.
+.#>
+[CmdletBinding(SupportsShouldProcess=$true,ConfirmImpact='None',DefaultParameterSetName='Default')]
+Param(
+    [Parameter(Mandatory=$false,ParameterSetName='Default')]
+    [Alias("Path","P")]
+    [Switch]$WritePath,
+
+    [Parameter(Mandatory=$true,ParameterSetName='HelpText')]
+    [Alias("h")]
+    [Switch]$Help
+)
+
+# Catch Help Text Requests
+if (($Help) -or ($PSCmdlet.ParameterSetName -eq 'HelpText')) {
+    Get-Help -Name $MyInvocation.MyCommand.Path -Full
+    Exit 0
+}
+
+# Internal self-awareness variables for verbosity/logging
+$thisFunctionReference = "{0}" -f $MyInvocation.MyCommand
+$thisScript = $thisFunctionReference
+
+function Add-PyshimPathEntry {
+    Param(
+        [Parameter(Mandatory=$true)]
+        [System.String]$TargetPath,
+
+        [Parameter(Mandatory=$true)]
+        [System.String]$CurrentUserPath
+    )
+
+    $SplitPaths = @()
+    if ($CurrentUserPath) {
+        $SplitPaths = $CurrentUserPath -split ';'
+    }
+
+    if (-not ($SplitPaths | Where-Object { $_.TrimEnd('\') -ieq $TargetPath.TrimEnd('\') })) {
+        $SplitPaths = @($SplitPaths | Where-Object { $_ }) + $TargetPath
+    }
+
+    return ($SplitPaths | Where-Object { $_ }) -join ';'
+}
+
+function Get-PyshimPathScopes {
+    Param()
+
+    return [PSCustomObject]@{
+        Process = $env:Path
+        User    = [Environment]::GetEnvironmentVariable('Path','User')
+        Machine = [Environment]::GetEnvironmentVariable('Path','Machine')
+    }
+}
+
+function Test-PyshimPathPresence {
+    Param(
+        [Parameter(Mandatory=$true)]
+        [System.String]$TargetPath,
+
+        [Parameter(Mandatory=$true)]
+        [System.String[]]$Scopes
+    )
+
+    foreach ($Scope in $Scopes) {
+        if (-not $Scope) {
+            continue
+        }
+
+        $Entries = $Scope -split ';'
+        if ($Entries | Where-Object { $_.TrimEnd('\') -ieq $TargetPath.TrimEnd('\') }) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
+$ShimDir = 'C:\bin\shims'
+$SourceDir = Join-Path -Path $PSScriptRoot -ChildPath 'shims'
+
+if (-not (Test-Path -LiteralPath $SourceDir)) {
+    throw "Shim source directory '$SourceDir' was not found."
+}
+
+if (-not (Test-Path -LiteralPath $ShimDir)) {
+    if ($PSCmdlet.ShouldProcess($ShimDir,'Create shim directory')) {
+        New-Item -ItemType Directory -Path $ShimDir -Force | Out-Null
+    }
+}
+
+$CopySource = Join-Path -Path $SourceDir -ChildPath '*'
+if ($PSCmdlet.ShouldProcess($ShimDir,'Copy shim files')) {
+    Copy-Item -Path $CopySource -Destination $ShimDir -Recurse -Force
+    Write-Verbose "[$thisScript] Copied shims from '$SourceDir' to '$ShimDir'."
+}
+
+$PathScopes = Get-PyshimPathScopes
+$AllScopes = @($PathScopes.Process,$PathScopes.User,$PathScopes.Machine)
+$PathPresent = Test-PyshimPathPresence -TargetPath $ShimDir -Scopes $AllScopes
+
+if ($PathPresent) {
+    Write-Verbose "[$thisScript] Shim directory already present in PATH."
+    return
+}
+
+$ShouldWritePath = $false
+if ($WritePath) {
+    $ShouldWritePath = $true
+} else {
+    $Response = Read-Host "Add '$ShimDir' to your user PATH? [y/N]"
+    if ($Response -and ($Response.Trim() -match '^(y|yes)$')) {
+        $ShouldWritePath = $true
+    }
+}
+
+if ($ShouldWritePath) {
+    if ($PSCmdlet.ShouldProcess('User PATH','Append shim directory')) {
+        $NewUserPath = Add-PyshimPathEntry -TargetPath $ShimDir -CurrentUserPath $PathScopes.User
+        [Environment]::SetEnvironmentVariable('Path',$NewUserPath,'User')
+        $EnvEntries = $env:Path -split ';'
+        if (-not ($EnvEntries | Where-Object { $_.TrimEnd('\') -ieq $ShimDir.TrimEnd('\') })) {
+            $env:Path = ($EnvEntries + $ShimDir | Where-Object { $_ }) -join ';'
+        }
+        Write-Host "Added '$ShimDir' to the user PATH. Restart shells that were already open."
+    }
+} else {
+    Write-Host "Skipping PATH update. To add it later run:`n  [Environment]::SetEnvironmentVariable('Path',( '{0};' + [Environment]::GetEnvironmentVariable('Path','User')).Trim(';'),'User')" -f $ShimDir
+}
+```
+
+## `.\tools\New-PyshimInstaller.ps1`
+
+```powershell
+<#
+.SYNOPSIS
+    Generates the single-file Install-Pyshim.ps1 installer for release builds.
+.DESCRIPTION
+    Zips the repository's bin/shims directory, converts it to Base64, and injects
+    the payload into tools/Install-Pyshim.template.ps1. The rendered installer is
+    written to dist/Install-Pyshim.ps1 (or a custom destination when specified).
+.PARAMETER OutputPath
+    Optional destination for the generated installer. Defaults to dist/Install-Pyshim.ps1
+    relative to the repository root.
+.PARAMETER Force
+    Overwrite the output file if it already exists.
+.EXAMPLE
+    pwsh ./tools/New-PyshimInstaller.ps1
+
+    Writes dist/Install-Pyshim.ps1 with the current shims payload embedded.
+.EXAMPLE
+    pwsh ./tools/New-PyshimInstaller.ps1 -OutputPath ./Install-Pyshim.ps1 -Force
+
+    Generates the installer at the repository root, overwriting any existing file.
+#>
+[CmdletBinding()]
+Param(
+    [Parameter(Mandatory=$false)]
+    [System.String]$OutputPath,
+
+    [Parameter(Mandatory=$false)]
+    [Switch]$Force
+)
+
+$RepoRoot = Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..')
+$SourceDir = Join-Path -Path $RepoRoot -ChildPath 'bin/shims'
+$TemplatePath = Join-Path -Path $PSScriptRoot -ChildPath 'Install-Pyshim.template.ps1'
+
+if (-not $OutputPath) {
+    $OutputDir = Join-Path -Path $RepoRoot -ChildPath 'dist'
+    if (-not (Test-Path -LiteralPath $OutputDir)) {
+        New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
+    }
+    $OutputPath = Join-Path -Path $OutputDir -ChildPath 'Install-Pyshim.ps1'
+} else {
+    $OutputPath = Resolve-Path -Path $OutputPath -ErrorAction SilentlyContinue -OutVariable resolved | Out-Null
+    if ($resolved) {
+        $OutputPath = $resolved.ProviderPath
+    } else {
+        $OutputPath = [IO.Path]::GetFullPath((Join-Path -Path (Get-Location) -ChildPath $OutputPath))
+    }
+}
+
+if (-not (Test-Path -LiteralPath $SourceDir)) {
+    throw "Shim source directory '$SourceDir' was not found."
+}
+
+if (-not (Test-Path -LiteralPath $TemplatePath)) {
+    throw "Template file '$TemplatePath' was not found."
+}
+
+if ((Test-Path -LiteralPath $OutputPath) -and (-not $Force)) {
+    throw "Output file '$OutputPath' already exists. Use -Force to overwrite."
+}
+
+$TempRoot = New-Item -ItemType Directory -Path (Join-Path ([IO.Path]::GetTempPath()) ("pyshim_dist_" + [Guid]::NewGuid().ToString('N'))) -Force
+$TempZip = Join-Path -Path $TempRoot -ChildPath 'payload.zip'
+
+try {
+    Compress-Archive -Path (Join-Path -Path $SourceDir -ChildPath '*') -DestinationPath $TempZip -Force
+    $Bytes = [IO.File]::ReadAllBytes($TempZip)
+    $Base64 = [Convert]::ToBase64String($Bytes)
+    $Builder = New-Object System.Text.StringBuilder
+    for ($Offset = 0; $Offset -lt $Base64.Length; $Offset += 76) {
+        $ChunkLength = [Math]::Min(76, $Base64.Length - $Offset)
+        [void]$Builder.AppendLine($Base64.Substring($Offset,$ChunkLength))
+    }
+    $WrappedBase64 = $Builder.ToString().TrimEnd()
+    Write-Verbose ("Payload size: {0} bytes ({1} base64 characters)" -f $Bytes.Length,$Base64.Length)
+
+    $TemplateContent = Get-Content -LiteralPath $TemplatePath -Raw
+    $Rendered = $TemplateContent -replace '__PYSHIM_EMBEDDED_ARCHIVE__',$WrappedBase64
+    if ($Rendered -notlike '*__PYSHIM_EMBEDDED_ARCHIVE__*') {
+        Write-Verbose "Embedded archive inserted."
+    } else {
+        throw 'Failed to embed archive payload.'
+    }
+
+    Set-Content -LiteralPath $OutputPath -Value $Rendered -Encoding ASCII -Force
+    Write-Host "Installer written to $OutputPath" -ForegroundColor Green
+} finally {
+    if (Test-Path -LiteralPath $TempRoot) {
+        Remove-Item -LiteralPath $TempRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
 }
 ```
 
@@ -1506,16 +1962,16 @@ set "_here=%_parent%"
 goto :WALKUP
 ```
 
-## `.\bin\shims\python.env`
-
-```bash
-C:\Users\h8rt3rmin8r\miniconda3\envs\py312\python.exe
-```
-
 ## `.\examples\python.env`
 
 ```bash
 py:3.12
+```
+
+## `.\bin\shims\python.env`
+
+```bash
+C:\Users\h8rt3rmin8r\miniconda3\envs\py312\python.exe
 ```
 
 ## `.\examples\python@MyService.env`
@@ -1562,7 +2018,7 @@ function Invoke-TimedCommand {
         [Switch]$IsGetCommand
     )
 
-    Write-Host "  Running: $Description" -ForegroundColor Cyan
+    Write-Host "    Running: $Description" -ForegroundColor Cyan
     $CommandStart = Get-Date
     $Job = Start-Job -ScriptBlock $Command
 
@@ -1571,7 +2027,7 @@ function Invoke-TimedCommand {
     $Duration = ($CommandEnd - $CommandStart).TotalSeconds
 
     if ($null -eq $Completed) {
-        Write-Host "    TIMEOUT after $Duration seconds (max: $TimeoutSeconds)" -ForegroundColor Red
+    Write-Host "    TIMEOUT after $Duration seconds (max: $TimeoutSeconds)" -ForegroundColor Red
         Stop-Job -Job $Job -ErrorAction SilentlyContinue
         Remove-Job -Job $Job -Force -ErrorAction SilentlyContinue
         $script:TestsFailed = $true
@@ -1587,21 +2043,21 @@ function Invoke-TimedCommand {
     if ($JobState -eq 'Failed' -or ($JobError -and $JobError.Count -gt 0)) {
         Write-Host "    FAILED (duration: $Duration seconds)" -ForegroundColor Red
         if ($JobError) {
-            $JobError | ForEach-Object { Write-Host "      ERROR: $_" -ForegroundColor Red }
+            $JobError | ForEach-Object { Write-Host "    ERROR: $_" -ForegroundColor Red }
         }
         $script:TestsFailed = $true
         return $false
     }
 
-    Write-Host "    OK (duration: $Duration seconds)" -ForegroundColor Green
+    Write-Host "    Result: OK (duration: $Duration seconds)" -ForegroundColor Green
     
     if ($JobOutput) {
         if ($IsGetCommand) {
             $JsonOutput = $JobOutput | Select-Object CommandType, Name, Version, Source | ConvertTo-Json -Compress
-            Write-Host "      $JsonOutput" -ForegroundColor Gray
+            Write-Host "    Output: $JsonOutput" -ForegroundColor Gray
         } else {
             $FlatOutput = ($JobOutput | Out-String).Trim() -replace "`r`n", ", " -replace "`n", ", "
-            Write-Host "      $FlatOutput" -ForegroundColor Gray
+            Write-Host "    Output: $FlatOutput" -ForegroundColor Gray
         }
     }
     return $true
@@ -1670,7 +2126,7 @@ $SepLine | Write-Host
 Write-Host "Running a simple Python command using the pyshim function Run-WithPython:" -ForegroundColor Yellow
 
 Invoke-TimedCommand -Description "Run-WithPython -Spec 'py:3' -- -c `"print('ok')`"" -Command {
-    Import-Module 'C:\bin\shims\pyshim.psm1' -Force
+    Import-Module 'C:\bin\shims\pyshim.psm1' -Force -DisableNameChecking
     Run-WithPython -Spec 'py:3' -- -c "print('ok')"
     $LASTEXITCODE
 } | Out-Null
@@ -1713,7 +2169,7 @@ if (Test-Path -LiteralPath $UncPath -ErrorAction SilentlyContinue) {
         }
     } | Out-Null
 } else {
-    Write-Host "  Skipped (UNC path not accessible)" -ForegroundColor Gray
+    Write-Host "    Skipped (UNC path not accessible)" -ForegroundColor Gray
 }
 
 #-------------------------------------------------------------------------------

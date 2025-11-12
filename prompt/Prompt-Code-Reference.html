@@ -448,6 +448,23 @@ If no specific interpreter is found, pyshim falls back to:</p>
 </li>
 </ol>
 <hr>
+<h3 id="releases--single-file-installer">Releases &amp; Single-File Installer</h3>
+<ul>
+<li>
+<p>Run <code>pwsh ./tools/New-PyshimInstaller.ps1</code> to regenerate <code>dist/Install-Pyshim.ps1</code> with the current shims embedded.</p>
+</li>
+<li>
+<p>Attach <code>dist/Install-Pyshim.ps1</code> to the GitHub release. End users can install by executing:</p>
+<pre class="hljs"><code><div>powershell.exe <span class="hljs-literal">-ExecutionPolicy</span> Bypass <span class="hljs-operator">-File</span> .\<span class="hljs-built_in">Install-Pyshim</span>.ps1 <span class="hljs-literal">-WritePath</span>
+</div></code></pre>
+</li>
+<li>
+<p>The installer mirrors <code>Make-Pyshim.ps1</code>: it copies the shims into <code>C:\bin\shims</code> and (optionally) appends that directory to the user PATH.</p>
+</li>
+<li>
+<p>The <code>Build Installer</code> GitHub workflow (<code>.github/workflows/build-installer.yml</code>) can be triggered manually or by publishing a release. It runs the generator script and, when invoked from a release, uploads the installer as a release asset automatically.</p>
+</li>
+</ul>
 <h3 id="usage">Usage</h3>
 <h4 id="global-interpreter">Global Interpreter</h4>
 <p>Set the global default interpreter for all sessions:</p>
@@ -638,299 +655,505 @@ yarn-error.log*
 <h2 id="examplespython-version"><code>.\examples\.python-version</code></h2>
 <pre class="hljs"><code><div>C:\Users\you\miniconda3\envs\myproj\python.exe
 </div></code></pre>
-<h2 id="githubcopilot-instructionsmd"><code>.\.github\copilot-instructions.md</code></h2>
-<p>This document provides instructions for AI coding agents to effectively assist in developing the pyshim project.</p>
-<h3 id="project-overview-pyshim">Project Overview: pyshim</h3>
-<p><strong>pyshim</strong> is a deterministic, context-aware Python shim system for Windows that intercepts <code>python</code>, <code>pip</code>, and <code>pythonw</code> calls to route them to the correct interpreter based on context. The system consists of three core components:</p>
-<ol>
-<li><strong>Batch Shims</strong> (<code>python.bat</code>, <code>pip.bat</code>, <code>pythonw.bat</code>) — Entry points that resolve interpreter specs through a priority chain and delegate to the actual interpreter</li>
-<li><strong>PowerShell Module</strong> (<code>pyshim.psm1</code>) — User-facing cmdlets for managing interpreter selection and persistence</li>
-<li><strong>Config Files</strong> (<code>python.env</code>, <code>python@AppName.env</code>, <code>.python-version</code>) — Text files storing interpreter specifications</li>
-</ol>
-<h4 id="architecture--resolution-priority">Architecture &amp; Resolution Priority</h4>
-<p>When <code>python.bat</code> is invoked, it resolves the interpreter using this exact priority chain:</p>
-<ol>
-<li><strong>One-shot flag</strong>: <code>--interpreter &quot;SPEC&quot; --</code> (used by <code>Run-WithPython</code> and direct invocation)</li>
-<li><strong>Session variable</strong>: <code>$env:PYSHIM_INTERPRETER</code> (set by <code>Use-Python</code> without <code>-Persist</code>)</li>
-<li><strong>App-target override</strong>: <code>python@%PYSHIM_TARGET%.env</code> (set by <code>Set-AppPython</code>)</li>
-<li><strong>Project pin</strong>: <code>.python-version</code> file in current directory or parent chain (walks up directory tree)</li>
-<li><strong>Global persistence</strong>: <code>python.env</code> (unless <code>python.nopersist</code> marker exists)</li>
-<li><strong>Fallback chain</strong>: <code>py -3.12</code> → <code>py -3</code> → <code>conda run -n base python</code> → real <code>python.exe</code> (not in shim dir) → (error if none found)</li>
-</ol>
-<p><strong>Important</strong>: The fallback chain avoids infinite recursion by:</p>
-<ul>
-<li>Using <code>PYSHIM_FROM_PY</code> guard variable when called from <code>py.bat</code></li>
-<li>Skipping <code>python.exe</code> results that point to the shim directory itself</li>
-<li>Using explicit commands (<code>py.exe</code>, <code>conda</code>, absolute paths) rather than bare <code>python</code></li>
-</ul>
-<h4 id="interpreter-spec-formats">Interpreter Spec Formats</h4>
-<p>The system supports three spec formats (stored in <code>.env</code> and <code>.python-version</code> files):</p>
-<ul>
-<li><code>py:3.12</code> — Uses Windows <code>py</code> launcher with specific version</li>
-<li><code>conda:envname</code> — Uses Conda environment</li>
-<li><code>C:\Path\to\python.exe</code> — Absolute path to interpreter binary</li>
-</ul>
-<p>These specs are parsed by the <code>:RESOLVE_SPEC</code> subroutine in <code>python.bat</code> (lines 91-115).</p>
-<h4 id="key-files--their-roles">Key Files &amp; Their Roles</h4>
-<ul>
-<li><strong><code>python.bat</code></strong> (~137 lines): Core resolver logic with batch subroutines <code>:RESOLVE_SPEC</code> and <code>:FIND_DOTFILE</code> (walks directory tree for <code>.python-version</code>)</li>
-<li><strong><code>pip.bat</code></strong> (4 lines): Trivial wrapper that calls <code>python.bat -m pip</code></li>
-<li><strong><code>pythonw.bat</code></strong> (4 lines): Best-effort headless wrapper (delegates to <code>python.bat</code>)</li>
-<li><strong><code>pyshim.psm1</code></strong> (124 lines): PowerShell module with cmdlets <code>Use-Python</code>, <code>Disable-PythonPersistence</code>, <code>Enable-PythonPersistence</code>, <code>Set-AppPython</code>, <code>Run-WithPython</code></li>
-<li><strong><code>tests/smoke.ps1</code></strong>: Basic smoke test verifying <code>python -V</code>, <code>pip --version</code>, and <code>Run-WithPython</code></li>
-</ul>
-<p><strong>Note</strong>: <code>py.bat</code> is NOT included — the shim relies on the native Windows Python Launcher (<code>py.exe</code>) being installed globally.</p>
-<h4 id="critical-implementation-details">Critical Implementation Details</h4>
-<p><strong>Batch File Constraints</strong>:</p>
-<ul>
-<li>Uses <code>ENABLEDELAYEDEXPANSION</code> for variable expansion in loops</li>
-<li>Subroutines use <code>call :LABEL</code> pattern with output variables passed by name (e.g., <code>call :RESOLVE_SPEC &quot;%SPEC%&quot; RESOLVED_CMD</code>)</li>
-<li><code>:FIND_DOTFILE</code> implements parent directory walking using <code>%%~dpD</code> to extract parent paths</li>
-<li>Exit codes must be preserved with <code>exit /b %ERRORLEVEL%</code></li>
-<li><strong>Critical</strong>: Final fallback uses <code>py</code> (not <code>python</code>) to prevent infinite recursion since <code>python.bat</code> IS the <code>python</code> command in PATH</li>
-</ul>
-<p><strong>PowerShell Module Design</strong>:</p>
-<ul>
-<li>All cmdlets use <code>[CmdletBinding()]</code> with no parameters (lightweight functions)</li>
-<li>File operations use <code>-LiteralPath</code> for whitespace-safe handling</li>
-<li>Files written with <code>-NoNewline -Encoding ASCII</code> to avoid trailing newlines and BOM issues</li>
-<li>Hardcoded shim directory: <code>C:\bin\shims</code> (not parameterized — design choice for simplicity)</li>
-</ul>
-<p><strong>File Format Discipline</strong>:</p>
-<ul>
-<li>All <code>.env</code> files contain a single line with no trailing newline (enforced by <code>Set-Content -NoNewline</code>)</li>
-<li>Parsed with <code>for /f &quot;usebackq delims=&quot;</code> in batch to preserve exact content</li>
-<li><code>.python-version</code> files follow same single-line format</li>
-</ul>
-<h4 id="development-workflows">Development Workflows</h4>
-<p><strong>Testing Changes</strong>:</p>
-<pre class="hljs"><code><div><span class="hljs-comment">## Run smoke test to verify basic functionality</span>
-.\tests\smoke.ps1
+<h2 id="githubworkflowsbuild-installeryml"><code>.\.github\workflows\build-installer.yml</code></h2>
+<pre class="hljs"><code><div><span class="hljs-attr">name:</span> <span class="hljs-string">Build</span> <span class="hljs-string">Installer</span>
 
-<span class="hljs-comment">## Manual verification of resolution priority</span>
-<span class="hljs-built_in">Use-Python</span> <span class="hljs-literal">-Spec</span> <span class="hljs-string">'py:3.12'</span> <span class="hljs-literal">-Persist</span>
-python <span class="hljs-literal">-V</span>
+<span class="hljs-attr">on:</span>
+  <span class="hljs-attr">workflow_dispatch:</span>
+  <span class="hljs-attr">release:</span>
+    <span class="hljs-attr">types:</span> <span class="hljs-string">[published]</span>
+
+<span class="hljs-attr">jobs:</span>
+  <span class="hljs-attr">build:</span>
+    <span class="hljs-attr">runs-on:</span> <span class="hljs-string">windows-latest</span>
+    <span class="hljs-attr">defaults:</span>
+      <span class="hljs-attr">run:</span>
+        <span class="hljs-attr">shell:</span> <span class="hljs-string">pwsh</span>
+    <span class="hljs-attr">steps:</span>
+      <span class="hljs-bullet">-</span> <span class="hljs-attr">name:</span> <span class="hljs-string">Check</span> <span class="hljs-string">out</span> <span class="hljs-string">repository</span>
+        <span class="hljs-attr">uses:</span> <span class="hljs-string">actions/checkout@v4</span>
+
+      <span class="hljs-bullet">-</span> <span class="hljs-attr">name:</span> <span class="hljs-string">Generate</span> <span class="hljs-string">installer</span>
+        <span class="hljs-attr">run:</span> <span class="hljs-string">./tools/New-PyshimInstaller.ps1</span> <span class="hljs-string">-Force</span> <span class="hljs-string">-OutputPath</span> <span class="hljs-string">./dist/Install-Pyshim.ps1</span>
+
+      <span class="hljs-bullet">-</span> <span class="hljs-attr">name:</span> <span class="hljs-string">Upload</span> <span class="hljs-string">installer</span> <span class="hljs-string">artifact</span>
+        <span class="hljs-attr">if:</span> <span class="hljs-string">github.event_name</span> <span class="hljs-string">==</span> <span class="hljs-string">'workflow_dispatch'</span>
+        <span class="hljs-attr">uses:</span> <span class="hljs-string">actions/upload-artifact@v4</span>
+        <span class="hljs-attr">with:</span>
+          <span class="hljs-attr">name:</span> <span class="hljs-string">Install-Pyshim.ps1</span>
+          <span class="hljs-attr">path:</span> <span class="hljs-string">dist/Install-Pyshim.ps1</span>
+
+      <span class="hljs-bullet">-</span> <span class="hljs-attr">name:</span> <span class="hljs-string">Attach</span> <span class="hljs-string">installer</span> <span class="hljs-string">to</span> <span class="hljs-string">release</span>
+        <span class="hljs-attr">if:</span> <span class="hljs-string">github.event_name</span> <span class="hljs-string">==</span> <span class="hljs-string">'release'</span>
+        <span class="hljs-attr">uses:</span> <span class="hljs-string">softprops/action-gh-release@v1</span>
+        <span class="hljs-attr">with:</span>
+          <span class="hljs-attr">files:</span> <span class="hljs-string">dist/Install-Pyshim.ps1</span>
 </div></code></pre>
-<p><strong>Adding New Cmdlets</strong>:</p>
+<h2 id="githubcopilot-instructionsmd"><code>.\.github\copilot-instructions.md</code></h2>
+<h3 id="project-snapshot">Project Snapshot</h3>
 <ul>
-<li>Follow existing pattern in <code>pyshim.psm1</code></li>
-<li>Include full comment-based help with <code>.SYNOPSIS</code>, <code>.DESCRIPTION</code>, <code>.PARAMETER</code>, <code>.EXAMPLE</code></li>
-<li>Use <code>$ShimDir = 'C:\bin\shims'</code> for path construction</li>
-<li>File writes should use <code>-NoNewline -Encoding ASCII</code></li>
+<li>pyshim routes Windows python/pip/pythonw calls via batch shims in <code>bin/shims</code> and a PowerShell module to pick the right interpreter.</li>
+<li>Core pieces: <code>python.bat</code> resolver, tiny wrappers (<code>pip.bat</code>, <code>pythonw.bat</code>), and <code>pyshim.psm1</code> cmdlets managing config files.</li>
 </ul>
-<p><strong>Modifying Resolution Logic</strong>:</p>
+<h3 id="resolution-chain-binshimspythonbat">Resolution Chain (bin/shims/python.bat)</h3>
 <ul>
-<li>Changes to priority chain happen in <code>python.bat</code> (lines 10-88)</li>
-<li>Spec parsing logic lives in <code>:RESOLVE_SPEC</code> subroutine (lines 91-115)</li>
-<li>Always preserve <code>%ERRORLEVEL%</code> when delegating to resolved interpreter</li>
+<li>Priority is fixed: one-shot <code>--interpreter</code> → session <code>PYSHIM_INTERPRETER</code> → app <code>python@%PYSHIM_TARGET%.env</code> → project <code>.python-version</code> up the tree → global <code>python.env</code> → fallback.</li>
+<li>Fallback executes <code>py -3.12</code>, then <code>py -3</code>, then <code>conda run -n base python</code>, then the first real <code>python.exe</code> outside the shim dir; never add bare <code>python</code> or we loop forever.</li>
+<li><code>:RESOLVE_SPEC</code> parses specs (<code>py:3.12</code>, <code>conda:env</code>, absolute paths); <code>:FIND_DOTFILE</code> walks parents using delayed expansion.</li>
 </ul>
-<h4 id="common-pitfalls">Common Pitfalls</h4>
+<h3 id="config-surfaces">Config Surfaces</h3>
 <ul>
-<li><strong>Trailing Newlines</strong>: Config files MUST NOT have trailing newlines (breaks batch parsing)</li>
-<li><strong>Path Separators</strong>: Use <code>Join-Path</code> in PowerShell; avoid hardcoded <code>\</code> for potential Linux compatibility</li>
-<li><strong>Delayed Expansion</strong>: Required in batch for variable mutation in loops/conditionals</li>
-<li><strong>Case Sensitivity</strong>: Batch is case-insensitive, but <code>.python-version</code> filename is lowercase by convention (matching <code>pyenv</code>)</li>
-<li><strong>Infinite Recursion</strong>: Never use bare <code>python</code> in fallback chain — <code>python.bat</code> IS the <code>python</code> command, so it would call itself. Always use <code>py.exe</code> or absolute paths in fallbacks</li>
+<li>All <code>.env</code> and <code>.python-version</code> files are single-line ASCII with no trailing newline; editing scripts rely on <code>for /f &quot;usebackq&quot;</code>.</li>
+<li><code>python.nopersist</code> toggles global persistence; guard <code>PYSHIM_FROM_PY</code> stops recursive launches when <code>py.exe</code> hands control back.</li>
 </ul>
-<h4 id="design-philosophy">Design Philosophy</h4>
-<p>pyshim prioritizes <strong>determinism</strong> and <strong>zero-configuration</strong> over flexibility:</p>
+<h3 id="powershell-module-binshimspyshimpsm1">PowerShell Module (bin/shims/pyshim.psm1)</h3>
 <ul>
-<li>No installer required — just copy files and update PATH</li>
-<li>Hardcoded paths (<code>C:\bin\shims</code>) for predictability</li>
-<li>Minimal dependencies (PowerShell 5.1+, Windows batch)</li>
-<li>Spec files use simple text format (no JSON/YAML parsing overhead)</li>
-<li>Global state is explicit (<code>.env</code> files in shim directory, not registry or AppData)</li>
+<li>Cmdlets (<code>Use-Python</code>, <code>Run-WithPython</code>, etc.) use <code>[CmdletBinding()]</code>, explicit <code>Param()</code> blocks, PascalCase variables, and write files with <code>Set-Content -NoNewline -Encoding ASCII -LiteralPath</code>.</li>
+<li>Always compute <code>$Sep = [IO.Path]::DirectorySeparatorChar</code> before building paths and prefer <code>Join-Path</code>; thanks again, Microsoft.</li>
+<li>Maintain self-awareness variables (<code>$thisFunctionReference</code> et al.) for logging when new helpers are introduced.</li>
 </ul>
-<h3 id="standards-for-writing-style-and-tone">Standards for Writing Style and Tone</h3>
+<h3 id="testing--verification">Testing &amp; Verification</h3>
 <ul>
-<li>Always write in a way that reads as genuinely human and free from any linguistic patterns that commonly expose AI-generated text. Avoid all &quot;AI tells,&quot; including but not limited to: excessive politeness, generic transitions (e.g., &quot;Furthermore,&quot; &quot;In conclusion,&quot; &quot;Overall&quot;), filler phrases (&quot;It's important to note that&quot;), parallel-sounding constructions (&quot;not only...but also&quot;), and overly balanced or neatly summarized conclusions.</li>
-<li>Favor a natural flow that mirrors how an experienced writer or professional would actually communicate:
-<ul>
-<li>Use sentence length variation (occasional fragments are fine).</li>
-<li>Use contractions naturally (&quot;I'm,&quot; &quot;don't,&quot; &quot;that's&quot;).</li>
-<li>Avoid corporate buzzwords and inflated adjectives unless context demands them.</li>
-<li>Use clarity, subtle rhythm, and precision over &quot;niceness.&quot;</li>
-<li>Never overexplain or restate points unless it aids comprehension.</li>
-<li>Eliminate template phrasing like &quot;Here's a breakdown,&quot; &quot;Let's explore,&quot; or &quot;This means that.&quot;</li>
+<li>Smoke test lives in <code>tests/smoke.ps1</code>; run <code>.\tests\smoke.ps1</code> from repo root when you touch the resolver or module.</li>
+<li>Manual sanity: <code>Use-Python -Spec 'py:3.12' -Persist</code> then <code>python -V</code>; use <code>Run-WithPython</code> for one-shot checks during debugging.</li>
 </ul>
-</li>
-<li>The tone should sound authentic, thoughtful, and intentional, not algorithmically tidy. Write as if the content were edited by a sharp human who values brevity, rhythm, and nuance more than structure or formality.</li>
-<li>Use a little bit of sarcasm or dry humor where appropriate and have fun talking trash about tools and frameworks developed by Microsoft (they deserve it).</li>
-</ul>
-<h3 id="system-environment-handling">System Environment Handling</h3>
-<h4 id="sensitivity-to-file-and-directory-names">Sensitivity to File and Directory Names</h4>
-<p>While this project is likely to be developed in a Windows 11 environment, it should be assumed that some (or all) of the code may be run in an Ubuntu Linux production environment. Windows file paths are case-insensitive, while Linux file paths use a much more robust case-sensitive approach. As such, when writing scripts that interact with the filesystem, care must be taken to ensure that file and directory names are treated in a universally compatible manner at all times. In addition to the matter of case sensitivity, Windows file systems use (for some unknowable reason) a <code>\</code> (backslash &quot;escape&quot;) separator character, while Linux file systems use a <code>/</code> (forward slash) separator. So while it would be convenient to treat all paths like Internet URLs like Linux, when writing scripts that interact with the filesystem, care must be taken to ensure that file and directory paths are constructed and parsed correctly for the target operating system (thanks to Microsoft).</p>
-<p>In Powershell, use a standard discovery method to determine the appropriate path separator for the current operating system and store that separator in a variable: <code>$Sep</code> (adapt this method for other scripting languages as needed):</p>
-<pre class="hljs"><code><div><span class="hljs-variable">$Sep</span> = [<span class="hljs-type">IO.Path</span>]::DirectorySeparatorChar
-</div></code></pre>
-<p>File and directory names should avoid spaces where possible. However, scripts must always account for cases where whitespace exists. When handling paths or user inputs in PowerShell, use the <code>-LiteralPath</code> parameter where supported (instead of the intuitive but ill-advised <code>-Path</code> parameter). Always verify the compatibility of the <code>-LiteralPath</code> parameter with each cmdlet to prevent errors when processing path references, as some cmdlets do NOT support <code>-LiteralPath</code>.</p>
-<p>On a side note, one of the original creators of PowerShell publicly complained about the broken state of the <code>-Path</code> parameter and its inconsistent handling of special characters. So (as is the case with all dumpster fire code written by Microsoft) this is a known fundamental bad-practice end-user pain point that Microsoft just simply ignores (okay I'm good now - moving on).</p>
-<h4 id="python-versioning-and-management">Python Versioning and Management</h4>
+<h3 id="development-habits">Development Habits</h3>
 <ul>
-<li>
-<p>The system-wide Python installation is exactly version <code>3.12.10</code>. This should be taken into account when writing or updating scripts that may interact with the Python installation or its packages.</p>
-</li>
-<li>
-<p>Whenever possible, try to use virtual environments for Python projects to avoid dependency conflicts and ensure consistent behavior across different development and production environments.</p>
-</li>
-<li>
-<p>Consider using python-poetry.org for managing Python project dependencies and virtual environments.</p>
-</li>
-<li>
-<p>If Poetry is not installed, it can be installed using one of the following commands:</p>
-<p>Install Poetry on Windows 11 (Powershell):</p>
-<pre class="hljs"><code><div>(<span class="hljs-built_in">Invoke-WebRequest</span> <span class="hljs-literal">-Uri</span> https://install.python<span class="hljs-literal">-poetry</span>.org <span class="hljs-literal">-UseBasicParsing</span>).Content | py -
-</div></code></pre>
-<p>Install Poetry on Ubuntu Linux (Bash):</p>
-<pre class="hljs"><code><div>curl -sSL https://install.python-poetry.org | python3 -
-</div></code></pre>
-<p>Note: You may need to also set up your system PATH to include Poetry's bin directory. Refer to the official Poetry documentation for guidance.</p>
-</li>
-<li>
-<p>Python is another dumpster fire situation. Backwards compatibility is a nightmare, and the ecosystem is riddled with poorly maintained packages and security vulnerabilities, and almost every project prides itself on reinventing the wheel. Always expect the worst and check the maintenance status of any third-party libraries before including them in a project, and only include well-established, actively maintained packages AT ALL TIMES.</p>
-</li>
+<li>Batch files assume delayed expansion and preserve <code>%ERRORLEVEL%</code>; never early-exit without <code>exit /b %ERRORLEVEL%</code>.</li>
+<li>Stick to four-space indents, no tabs, no stray whitespace, and keep helper functions alphabetized when you add new ones.</li>
+<li>New scripts inherit the comment-based help structure shown in the module; keep examples real by using existing commands.</li>
 </ul>
-<h3 id="general-code-formatting">General Code Formatting</h3>
+<h3 id="voice--tone">Voice &amp; Tone</h3>
 <ul>
-<li>
-<p><strong>Nested Helper Functions:</strong> For complex functions, break down logic into smaller, single-purpose nested helper functions. These helpers should follow a <code>ParentFunctionName-HelperAction</code> naming convention (e.g., <code>ApkExtract-ResolvePath</code>).</p>
-</li>
-<li>
-<p><strong>Variable Naming Convention:</strong> All variables should use <strong>PascalCase</strong> (e.g., <code>$NumbersCount</code>, <code>$InputFile</code>, <code>$ExitCode</code>). Do not use snake_case or camelCase unless absolutely necessary (like conformance with existing third-party code).</p>
-</li>
-<li>
-<p><strong>Clean Whitespace:</strong></p>
-<ul>
-<li>Never include a line that contains only whitespace characters. If a blank line is needed for readability, it must be completely empty.</li>
-<li>Never leave trailing whitespace at the end of any line.</li>
-<li>Always leave a single blank line between major logical sections of code (e.g., between function declarations)</li>
-<li>Never indent code using tab characters. Always use exactly <strong>four spaces</strong> for each level of indentation.</li>
+<li>Write like a human who has seen things: short sentences, natural contractions, no boilerplate transitions.</li>
+<li>Sprinkle dry sarcasm at Microsoft tooling when it fits; avoid generic pep-talks or AI-scented phrasing.</li>
 </ul>
-</li>
-<li>
-<p><strong>Brace Style (One True Brace Style):</strong> When declaring functions, <code>if</code> statements, loops, or any other code block, the opening curly brace <code>{</code> <strong>must</strong> be on the same line as the declaration. The closing curly brace <code>}</code> <strong>must</strong> be on its own line, aligned with the start of the declaration.</p>
-<pre class="hljs"><code><div><span class="hljs-comment"># Correct</span>
-<span class="hljs-function"><span class="hljs-keyword">function</span> <span class="hljs-title">Get-Something</span></span> {
-    <span class="hljs-keyword">if</span> (<span class="hljs-variable">$Condition</span>) {
-        <span class="hljs-comment"># Do work</span>
+<h3 id="quick-references">Quick References</h3>
+<ul>
+<li>Shim dir is hard-coded <code>C:\bin\shims</code>; keep paths literal and quote anything user-controlled.</li>
+<li>Keep the repo ASCII unless the pre-existing file already goes Unicode.</li>
+<li>Default Python on the box is 3.12.10; confirm interpreter specs align with that reality.</li>
+<li>If you spot untracked changes you didn't make, stop and ask before touching them.</li>
+</ul>
+<h3 id="when-in-doubt">When In Doubt</h3>
+<ul>
+<li>Prefer tool-specific helpers (PowerShell cmdlets, batch subroutines) over inventing new workflows, and document any new CLI entrypoint.</li>
+<li>Ask for clarification if interpreter resolution, persistence flags, or path rules seem underspecified.</li>
+</ul>
+<h2 id="distinstall-pyshimps1"><code>.\dist\Install-Pyshim.ps1</code></h2>
+<pre class="hljs"><code><div><span class="hljs-comment">&lt;#
+<span class="hljs-doctag">.SYNOPSIS</span>
+    Single-file installer that provisions pyshim shims to the local machine.
+<span class="hljs-doctag">.DESCRIPTION</span>
+    Unpacks an embedded archive containing the pyshim batch shims and PowerShell
+    module, then mirrors the behaviour of Make-Pyshim.ps1: copies the payload to
+    C:\bin\shims (creating the directory when needed) and optionally appends
+    that directory to the user PATH.
+
+    The embedded archive is generated from the repository's bin/shims directory
+    using tools/New-PyshimInstaller.ps1. Re-run that tool whenever the shims
+    change to refresh this installer before publishing a release asset.
+<span class="hljs-doctag">.PARAMETER WritePath</span>
+    Automatically append C:\bin\shims to the user PATH when it is missing. If
+    omitted the script prompts the user.
+<span class="hljs-doctag">.PARAMETER Help</span>
+    Display the full help text for this script.
+<span class="hljs-doctag">.EXAMPLE</span>
+    powershell.exe -ExecutionPolicy Bypass -File .\Install-Pyshim.ps1 -WritePath
+
+    Installs pyshim and ensures the user PATH contains C:\bin\shims.
+#&gt;</span>
+<span class="hljs-function">[<span class="hljs-type">CmdletBinding</span>(<span class="hljs-type">SupportsShouldProcess</span>=<span class="hljs-variable">$true</span>,<span class="hljs-type">ConfirmImpact</span>=<span class="hljs-string">'None'</span>,<span class="hljs-type">DefaultParameterSetName</span>=<span class="hljs-string">'Default'</span>)]</span>
+<span class="hljs-keyword">Param</span>(
+    [<span class="hljs-type">Parameter</span>(<span class="hljs-type">Mandatory</span>=<span class="hljs-variable">$false</span>,<span class="hljs-type">ParameterSetName</span>=<span class="hljs-string">'Default'</span>)]
+    [<span class="hljs-type">Alias</span>(<span class="hljs-string">'Path'</span>,<span class="hljs-string">'P'</span>)]
+    [<span class="hljs-type">Switch</span>]<span class="hljs-variable">$WritePath</span>,
+
+    [<span class="hljs-type">Parameter</span>(<span class="hljs-type">Mandatory</span>=<span class="hljs-variable">$true</span>,<span class="hljs-type">ParameterSetName</span>=<span class="hljs-string">'HelpText'</span>)]
+    [<span class="hljs-type">Alias</span>(<span class="hljs-string">'h'</span>)]
+    [<span class="hljs-type">Switch</span>]<span class="hljs-variable">$Help</span>
+)
+
+<span class="hljs-keyword">if</span> (<span class="hljs-variable">$Help</span> <span class="hljs-operator">-or</span> (<span class="hljs-variable">$PSCmdlet</span>.ParameterSetName <span class="hljs-operator">-eq</span> <span class="hljs-string">'HelpText'</span>)) {
+    <span class="hljs-built_in">Get-Help</span> <span class="hljs-literal">-Name</span> <span class="hljs-variable">$MyInvocation</span>.MyCommand.Path <span class="hljs-literal">-Full</span>
+    <span class="hljs-keyword">exit</span> <span class="hljs-number">0</span>
+}
+
+<span class="hljs-variable">$EmbeddedArchive</span> = <span class="hljs-string">@'
+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
+DAAAAAA=
+'@</span>
+
+<span class="hljs-built_in">Add-Type</span> <span class="hljs-literal">-AssemblyName</span> System.IO.Compression.FileSystem
+
+<span class="hljs-function"><span class="hljs-keyword">function</span> <span class="hljs-title">Add-PyshimPathEntry</span></span> {
+    <span class="hljs-keyword">Param</span>(
+        [<span class="hljs-type">Parameter</span>(<span class="hljs-type">Mandatory</span>=<span class="hljs-variable">$true</span>)]
+        [<span class="hljs-type">System.String</span>]<span class="hljs-variable">$TargetPath</span>,
+
+        [<span class="hljs-type">Parameter</span>(<span class="hljs-type">Mandatory</span>=<span class="hljs-variable">$true</span>)]
+        [<span class="hljs-type">System.String</span>]<span class="hljs-variable">$CurrentUserPath</span>
+    )
+
+    <span class="hljs-variable">$SplitPaths</span> = <span class="hljs-selector-tag">@</span>()
+    <span class="hljs-keyword">if</span> (<span class="hljs-variable">$CurrentUserPath</span>) {
+        <span class="hljs-variable">$SplitPaths</span> = <span class="hljs-variable">$CurrentUserPath</span> <span class="hljs-operator">-split</span> <span class="hljs-string">';'</span>
+    }
+
+    <span class="hljs-keyword">if</span> (<span class="hljs-operator">-not</span> (<span class="hljs-variable">$SplitPaths</span> | <span class="hljs-built_in">Where-Object</span> { <span class="hljs-variable">$_</span>.TrimEnd(<span class="hljs-string">'\\'</span>) <span class="hljs-operator">-ieq</span> <span class="hljs-variable">$TargetPath</span>.TrimEnd(<span class="hljs-string">'\\'</span>) })) {
+        <span class="hljs-variable">$SplitPaths</span> = <span class="hljs-selector-tag">@</span>(<span class="hljs-variable">$SplitPaths</span> | <span class="hljs-built_in">Where-Object</span> { <span class="hljs-variable">$_</span> }) + <span class="hljs-variable">$TargetPath</span>
+    }
+
+    <span class="hljs-keyword">return</span> (<span class="hljs-variable">$SplitPaths</span> | <span class="hljs-built_in">Where-Object</span> { <span class="hljs-variable">$_</span> }) <span class="hljs-operator">-join</span> <span class="hljs-string">';'</span>
+}
+
+<span class="hljs-function"><span class="hljs-keyword">function</span> <span class="hljs-title">Get-PyshimPathScopes</span></span> {
+    <span class="hljs-keyword">Param</span>()
+
+    <span class="hljs-keyword">return</span> [<span class="hljs-type">PSCustomObject</span>]<span class="hljs-selector-tag">@</span>{
+        <span class="hljs-keyword">Process</span> = <span class="hljs-variable">$env:Path</span>
+        User    = [<span class="hljs-type">Environment</span>]::GetEnvironmentVariable(<span class="hljs-string">'Path'</span>,<span class="hljs-string">'User'</span>)
+        Machine = [<span class="hljs-type">Environment</span>]::GetEnvironmentVariable(<span class="hljs-string">'Path'</span>,<span class="hljs-string">'Machine'</span>)
     }
 }
 
-<span class="hljs-comment"># Incorrect</span>
-<span class="hljs-function"><span class="hljs-keyword">function</span> <span class="hljs-title">Get-Something</span></span>
-{
-    <span class="hljs-comment"># ...</span>
+<span class="hljs-function"><span class="hljs-keyword">function</span> <span class="hljs-title">Test-PyshimPathPresence</span></span> {
+    <span class="hljs-keyword">Param</span>(
+        [<span class="hljs-type">Parameter</span>(<span class="hljs-type">Mandatory</span>=<span class="hljs-variable">$true</span>)]
+        [<span class="hljs-type">System.String</span>]<span class="hljs-variable">$TargetPath</span>,
+
+        [<span class="hljs-type">Parameter</span>(<span class="hljs-type">Mandatory</span>=<span class="hljs-variable">$true</span>)]
+        [<span class="hljs-type">System.String</span>[]]<span class="hljs-variable">$Scopes</span>
+    )
+
+    <span class="hljs-keyword">foreach</span> (<span class="hljs-variable">$Scope</span> <span class="hljs-keyword">in</span> <span class="hljs-variable">$Scopes</span>) {
+        <span class="hljs-keyword">if</span> (<span class="hljs-operator">-not</span> <span class="hljs-variable">$Scope</span>) {
+            <span class="hljs-keyword">continue</span>
+        }
+
+        <span class="hljs-variable">$Entries</span> = <span class="hljs-variable">$Scope</span> <span class="hljs-operator">-split</span> <span class="hljs-string">';'</span>
+        <span class="hljs-keyword">if</span> (<span class="hljs-variable">$Entries</span> | <span class="hljs-built_in">Where-Object</span> { <span class="hljs-variable">$_</span>.TrimEnd(<span class="hljs-string">'\\'</span>) <span class="hljs-operator">-ieq</span> <span class="hljs-variable">$TargetPath</span>.TrimEnd(<span class="hljs-string">'\\'</span>) }) {
+            <span class="hljs-keyword">return</span> <span class="hljs-variable">$true</span>
+        }
+    }
+
+    <span class="hljs-keyword">return</span> <span class="hljs-variable">$false</span>
+}
+
+<span class="hljs-function"><span class="hljs-keyword">function</span> <span class="hljs-title">Expand-PyshimArchive</span></span> {
+    <span class="hljs-keyword">Param</span>(
+        [<span class="hljs-type">Parameter</span>(<span class="hljs-type">Mandatory</span>=<span class="hljs-variable">$true</span>)]
+        [<span class="hljs-type">System.String</span>]<span class="hljs-variable">$DestinationPath</span>
+    )
+
+    <span class="hljs-variable">$Bytes</span> = [<span class="hljs-type">Convert</span>]::FromBase64String(<span class="hljs-variable">$EmbeddedArchive</span>)
+    <span class="hljs-variable">$ZipPath</span> = [<span class="hljs-type">IO.Path</span>]::GetTempFileName()
+    <span class="hljs-keyword">try</span> {
+        [<span class="hljs-type">IO.File</span>]::WriteAllBytes(<span class="hljs-variable">$ZipPath</span>,<span class="hljs-variable">$Bytes</span>)
+        [<span class="hljs-type">IO.Compression.ZipFile</span>]::ExtractToDirectory(<span class="hljs-variable">$ZipPath</span>,<span class="hljs-variable">$DestinationPath</span>,<span class="hljs-variable">$true</span>)
+    } <span class="hljs-keyword">finally</span> {
+        <span class="hljs-keyword">if</span> (<span class="hljs-built_in">Test-Path</span> <span class="hljs-literal">-LiteralPath</span> <span class="hljs-variable">$ZipPath</span>) {
+            <span class="hljs-built_in">Remove-Item</span> <span class="hljs-literal">-LiteralPath</span> <span class="hljs-variable">$ZipPath</span> <span class="hljs-literal">-Force</span> <span class="hljs-literal">-ErrorAction</span> SilentlyContinue
+        }
+    }
+}
+
+<span class="hljs-variable">$ShimDir</span> = <span class="hljs-string">'C:\bin\shims'</span>
+<span class="hljs-variable">$WorkingRoot</span> = <span class="hljs-built_in">Join-Path</span> <span class="hljs-literal">-Path</span> ([<span class="hljs-type">IO.Path</span>]::GetTempPath()) <span class="hljs-literal">-ChildPath</span> (<span class="hljs-string">"pyshim_"</span> + [<span class="hljs-type">Guid</span>]::NewGuid().ToString(<span class="hljs-string">'N'</span>))
+<span class="hljs-variable">$Null</span> = <span class="hljs-built_in">New-Item</span> <span class="hljs-literal">-ItemType</span> Directory <span class="hljs-literal">-Path</span> <span class="hljs-variable">$WorkingRoot</span> <span class="hljs-literal">-Force</span>
+
+<span class="hljs-keyword">try</span> {
+    <span class="hljs-built_in">Expand-PyshimArchive</span> <span class="hljs-literal">-DestinationPath</span> <span class="hljs-variable">$WorkingRoot</span>
+    <span class="hljs-variable">$PayloadSource</span> = <span class="hljs-variable">$WorkingRoot</span>
+
+    <span class="hljs-keyword">if</span> (<span class="hljs-operator">-not</span> (<span class="hljs-built_in">Test-Path</span> <span class="hljs-literal">-LiteralPath</span> <span class="hljs-variable">$ShimDir</span>)) {
+        <span class="hljs-keyword">if</span> (<span class="hljs-variable">$PSCmdlet</span>.ShouldProcess(<span class="hljs-variable">$ShimDir</span>,<span class="hljs-string">'Create shim directory'</span>)) {
+            <span class="hljs-built_in">New-Item</span> <span class="hljs-literal">-ItemType</span> Directory <span class="hljs-literal">-Path</span> <span class="hljs-variable">$ShimDir</span> <span class="hljs-literal">-Force</span> | <span class="hljs-built_in">Out-Null</span>
+        }
+    }
+
+    <span class="hljs-keyword">if</span> (<span class="hljs-variable">$PSCmdlet</span>.ShouldProcess(<span class="hljs-variable">$ShimDir</span>,<span class="hljs-string">'Copy embedded shims'</span>)) {
+        <span class="hljs-built_in">Copy-Item</span> <span class="hljs-literal">-Path</span> (<span class="hljs-built_in">Join-Path</span> <span class="hljs-literal">-Path</span> <span class="hljs-variable">$PayloadSource</span> <span class="hljs-literal">-ChildPath</span> <span class="hljs-string">'*'</span>) <span class="hljs-literal">-Destination</span> <span class="hljs-variable">$ShimDir</span> <span class="hljs-literal">-Recurse</span> <span class="hljs-literal">-Force</span>
+    }
+} <span class="hljs-keyword">finally</span> {
+    <span class="hljs-keyword">if</span> (<span class="hljs-built_in">Test-Path</span> <span class="hljs-literal">-LiteralPath</span> <span class="hljs-variable">$WorkingRoot</span>) {
+        <span class="hljs-built_in">Remove-Item</span> <span class="hljs-literal">-LiteralPath</span> <span class="hljs-variable">$WorkingRoot</span> <span class="hljs-literal">-Recurse</span> <span class="hljs-literal">-Force</span> <span class="hljs-literal">-ErrorAction</span> SilentlyContinue
+    }
+}
+
+<span class="hljs-variable">$PathScopes</span> = <span class="hljs-built_in">Get-PyshimPathScopes</span>
+<span class="hljs-variable">$AllScopes</span> = <span class="hljs-selector-tag">@</span>(<span class="hljs-variable">$PathScopes</span>.Process,<span class="hljs-variable">$PathScopes</span>.User,<span class="hljs-variable">$PathScopes</span>.Machine)
+<span class="hljs-variable">$PathPresent</span> = <span class="hljs-built_in">Test-PyshimPathPresence</span> <span class="hljs-literal">-TargetPath</span> <span class="hljs-variable">$ShimDir</span> <span class="hljs-literal">-Scopes</span> <span class="hljs-variable">$AllScopes</span>
+
+<span class="hljs-keyword">if</span> (<span class="hljs-variable">$PathPresent</span>) {
+    <span class="hljs-built_in">Write-Host</span> <span class="hljs-string">"C:\bin\shims already present in PATH."</span> <span class="hljs-literal">-ForegroundColor</span> Green
+    <span class="hljs-keyword">exit</span> <span class="hljs-number">0</span>
+}
+
+<span class="hljs-variable">$ShouldWritePath</span> = <span class="hljs-variable">$false</span>
+<span class="hljs-keyword">if</span> (<span class="hljs-variable">$WritePath</span>) {
+    <span class="hljs-variable">$ShouldWritePath</span> = <span class="hljs-variable">$true</span>
+} <span class="hljs-keyword">else</span> {
+    <span class="hljs-variable">$Response</span> = <span class="hljs-built_in">Read-Host</span> <span class="hljs-string">"Add 'C:\bin\shims' to your user PATH? [y/N]"</span>
+    <span class="hljs-keyword">if</span> (<span class="hljs-variable">$Response</span> <span class="hljs-operator">-and</span> (<span class="hljs-variable">$Response</span>.Trim() <span class="hljs-operator">-match</span> <span class="hljs-string">'^(y|yes)$'</span>)) {
+        <span class="hljs-variable">$ShouldWritePath</span> = <span class="hljs-variable">$true</span>
+    }
+}
+
+<span class="hljs-keyword">if</span> (<span class="hljs-variable">$ShouldWritePath</span>) {
+    <span class="hljs-keyword">if</span> (<span class="hljs-variable">$PSCmdlet</span>.ShouldProcess(<span class="hljs-string">'User PATH'</span>,<span class="hljs-string">'Append shim directory'</span>)) {
+        <span class="hljs-variable">$NewUserPath</span> = <span class="hljs-built_in">Add-PyshimPathEntry</span> <span class="hljs-literal">-TargetPath</span> <span class="hljs-variable">$ShimDir</span> <span class="hljs-literal">-CurrentUserPath</span> <span class="hljs-variable">$PathScopes</span>.User
+        [<span class="hljs-type">Environment</span>]::SetEnvironmentVariable(<span class="hljs-string">'Path'</span>,<span class="hljs-variable">$NewUserPath</span>,<span class="hljs-string">'User'</span>)
+        <span class="hljs-variable">$EnvEntries</span> = <span class="hljs-variable">$env:Path</span> <span class="hljs-operator">-split</span> <span class="hljs-string">';'</span>
+        <span class="hljs-keyword">if</span> (<span class="hljs-operator">-not</span> (<span class="hljs-variable">$EnvEntries</span> | <span class="hljs-built_in">Where-Object</span> { <span class="hljs-variable">$_</span>.TrimEnd(<span class="hljs-string">'\\'</span>) <span class="hljs-operator">-ieq</span> <span class="hljs-variable">$ShimDir</span>.TrimEnd(<span class="hljs-string">'\\'</span>) })) {
+            <span class="hljs-variable">$env:Path</span> = (<span class="hljs-variable">$EnvEntries</span> + <span class="hljs-variable">$ShimDir</span> | <span class="hljs-built_in">Where-Object</span> { <span class="hljs-variable">$_</span> }) <span class="hljs-operator">-join</span> <span class="hljs-string">';'</span>
+        }
+        <span class="hljs-built_in">Write-Host</span> <span class="hljs-string">"Added 'C:\bin\shims' to the user PATH. Restart existing shells."</span> <span class="hljs-literal">-ForegroundColor</span> Green
+    }
+    <span class="hljs-keyword">exit</span> <span class="hljs-number">0</span>
+} <span class="hljs-keyword">else</span> {
+    <span class="hljs-built_in">Write-Host</span> <span class="hljs-string">"Skipped PATH update. To add it later run:"</span> <span class="hljs-literal">-ForegroundColor</span> Yellow
+    <span class="hljs-built_in">Write-Host</span> <span class="hljs-string">"    [Environment]::SetEnvironmentVariable('Path',( '{0};' + [Environment]::GetEnvironmentVariable('Path','User')).Trim(';'),'User')"</span> <span class="hljs-operator">-f</span> <span class="hljs-variable">$ShimDir</span>
+    <span class="hljs-keyword">exit</span> <span class="hljs-number">0</span>
 }
 </div></code></pre>
-</li>
-</ul>
-<h3 id="scripting-standards-powershell-focused">Scripting Standards (Powershell Focused)</h3>
-<p>All non-Powershell scripts should include an appropriate shebang line at the top of the file:</p>
-<ul>
-<li>Bash: <code>#!/usr/bin/env bash</code></li>
-<li>Python: <code>#!/usr/bin/env python3</code></li>
-<li>Node.js: <code>#!/usr/bin/env node</code></li>
-<li>etc.</li>
-</ul>
-<p>Important Note: Never include a shebang line in Powershell scripts. Doing so will prevent the script from behaving correctly in Windows environments.</p>
-<p>All scripts and functions should closely adhere to the following general structure:</p>
-<ol>
-<li>Introduction
-<ul>
-<li><strong>Comprehensive ReadMe:</strong> Comprehensive comment-based Help Text documentation</li>
-<li><strong><code>[CmdletBinding()]</code> Declaration:</strong> (Powershell only)</li>
-<li><strong><code>Param()</code> Block:</strong> Define all input parameters (Powershell only)</li>
-</ul>
-</li>
-<li>Declarations
-<ul>
-<li><strong>Function Declarations:</strong> Function and sub-function declarations in alphabetical order</li>
-<li><strong>Variable &amp; Array Declarations:</strong> Variable and array declarations, including self-awareness variables (be sure to carefully sequence these correctly to avoid dependency issues when initializing variables that depend on other locally declared variables)</li>
-</ul>
-</li>
-<li>Core Logic
-<ul>
-<li><strong>Catch Help Text Requests:</strong> Display the help text and gracefully exit if the <code>-Help</code> parameter is specified</li>
-<li><strong>Validate Inputs:</strong> Validate user inputs or required environment variables if necessary</li>
-<li><strong>Main Process Logic:</strong> The core logic of the script or function, broken down into logical sections with clear comments explaining each part</li>
-</ul>
-</li>
-<li>Conclusion
-<ul>
-<li><strong>Return Output:</strong> Return outputs to the stdout stream and/or write require output files as needed</li>
-<li><strong>Garbage Collection:</strong> Clean up any temporary files or resources used during execution</li>
-<li><strong>Exit Gracefully:</strong> Exit with an appropriate exit code indicating success or failure (depending on the language, this may be implicit)</li>
-</ul>
-</li>
-</ol>
-<h4 id="comprehensive-readme">Comprehensive ReadMe</h4>
-<p>Example comment-based help block for Powershell:</p>
-<pre class="hljs"><code><div>&lt;#
-.SYNOPSIS
-    A brief summary of the function's purpose.
-.DESCRIPTION
-    A more detailed description of what the function does, how it behaves, and the kinds of inputs and outputs it handles.
-.PARAMETER ParameterName
-    A clear explanation of what this parameter is for along with any constraints or special behaviors.
-.EXAMPLE
-    A practical example of how to use the function.
-.LINK
-    [example.com](https://example.com/)
-#&gt;
-</div></code></pre>
-<ul>
-<li>When writing any Powershell script (or function or sub-function), always include a full comment-based help block at the very beginning of the file and before the internal logic of each function.</li>
-<li>At a minimum, in Powershell, this block must include <code>.SYNOPSIS</code>, <code>.DESCRIPTION</code>, <code>.PARAMETER</code> for each parameter, and at least one <code>.EXAMPLE</code>. Include a <code>.LINK</code> for external references where applicable.</li>
-<li>Relevant help text should be included in non-Powershell scripts as well (using appropriate interactive features and appropriate comment syntax).</li>
-</ul>
-<h4 id="cmdletbinding-powershell">CmdletBinding (Powershell)</h4>
-<p>Example <code>[CmdletBinding()]</code> declaration:</p>
-<pre class="hljs"><code><div>[<span class="hljs-type">CmdletBinding</span>(<span class="hljs-type">SupportsShouldProcess</span>=<span class="hljs-variable">$true</span>,<span class="hljs-type">ConfirmImpact</span>=<span class="hljs-string">'None'</span>,<span class="hljs-type">DefaultParameterSetName</span>=<span class="hljs-string">'Default'</span>)]
-</div></code></pre>
-<p>When writing PowerShell functions and scripts, always include a proper <code>[CmdletBinding()]</code> declaration directly following the comment-based help text. This ensures that the function behaves like a standard cmdlet, supporting common features like <code>-Verbose</code>, <code>-Debug</code>, and <code>-ErrorAction</code>.</p>
-<ul>
-<li>Avoid using empty whitespace inside the parentheses of <code>CmdletBinding()</code>. This line is already quite long, so keep it tight.</li>
-<li>If the function performs actions that change system state (e.g., file operations), consider including <code>SupportsShouldProcess=$true</code> in the declaration.</li>
-<li>Include <code>ConfirmImpact='None'</code> unless the function performs high-impact actions (who knows whatever that means).</li>
-<li>Always specify a <code>DefaultParameterSetName='Default'</code> to ensure predictable behavior regardless of how many parameter sets are defined.</li>
-<li>Additional attributes can be included if doing so would facilitate the function's specific needs and assumed use-cases (such as handling of pipeline inputs, etc). Make sure to understand the implications of each attribute before including it as these can completely break an entire script or function if misused.</li>
-</ul>
-<h4 id="param-block-powershell">Param Block (Powershell)</h4>
-<p>Define all parameters within a <code>Param()</code> block immediately following the <code>[CmdletBinding()]</code> declaration. This ensures standard cmdlet behavior. Be sure to leave a blank line between each clump of attributes related to a single parameter for readability.</p>
-<p>Example <code>Param()</code> block:</p>
-<pre class="hljs"><code><div><span class="hljs-keyword">Param</span>(
-    [<span class="hljs-type">Parameter</span>(<span class="hljs-type">Mandatory</span>=<span class="hljs-variable">$true</span>,<span class="hljs-type">ParameterSetName</span>=<span class="hljs-string">'Default'</span>)]
-    [<span class="hljs-type">Alias</span>(<span class="hljs-string">"f"</span>)]
-    [<span class="hljs-type">System.String</span>]<span class="hljs-variable">$File</span>,
+<h2 id="toolsinstall-pyshimtemplateps1"><code>.\tools\Install-Pyshim.template.ps1</code></h2>
+<pre class="hljs"><code><div><span class="hljs-comment">&lt;#
+<span class="hljs-doctag">.SYNOPSIS</span>
+    Single-file installer that provisions pyshim shims to the local machine.
+<span class="hljs-doctag">.DESCRIPTION</span>
+    Unpacks an embedded archive containing the pyshim batch shims and PowerShell
+    module, then mirrors the behaviour of Make-Pyshim.ps1: copies the payload to
+    C:\bin\shims (creating the directory when needed) and optionally appends
+    that directory to the user PATH.
 
+    The embedded archive is generated from the repository's bin/shims directory
+    using tools/New-PyshimInstaller.ps1. Re-run that tool whenever the shims
+    change to refresh this installer before publishing a release asset.
+<span class="hljs-doctag">.PARAMETER WritePath</span>
+    Automatically append C:\bin\shims to the user PATH when it is missing. If
+    omitted the script prompts the user.
+<span class="hljs-doctag">.PARAMETER Help</span>
+    Display the full help text for this script.
+<span class="hljs-doctag">.EXAMPLE</span>
+    powershell.exe -ExecutionPolicy Bypass -File .\Install-Pyshim.ps1 -WritePath
+
+    Installs pyshim and ensures the user PATH contains C:\bin\shims.
+#&gt;</span>
+<span class="hljs-function">[<span class="hljs-type">CmdletBinding</span>(<span class="hljs-type">SupportsShouldProcess</span>=<span class="hljs-variable">$true</span>,<span class="hljs-type">ConfirmImpact</span>=<span class="hljs-string">'None'</span>,<span class="hljs-type">DefaultParameterSetName</span>=<span class="hljs-string">'Default'</span>)]</span>
+<span class="hljs-keyword">Param</span>(
     [<span class="hljs-type">Parameter</span>(<span class="hljs-type">Mandatory</span>=<span class="hljs-variable">$false</span>,<span class="hljs-type">ParameterSetName</span>=<span class="hljs-string">'Default'</span>)]
-    [<span class="hljs-type">Alias</span>(<span class="hljs-string">"o"</span>,<span class="hljs-string">"outfile"</span>)]
-    [<span class="hljs-type">System.String</span>]<span class="hljs-variable">$Output</span> = <span class="hljs-string">"ProjectOutput.txt"</span>,
+    [<span class="hljs-type">Alias</span>(<span class="hljs-string">'Path'</span>,<span class="hljs-string">'P'</span>)]
+    [<span class="hljs-type">Switch</span>]<span class="hljs-variable">$WritePath</span>,
 
     [<span class="hljs-type">Parameter</span>(<span class="hljs-type">Mandatory</span>=<span class="hljs-variable">$true</span>,<span class="hljs-type">ParameterSetName</span>=<span class="hljs-string">'HelpText'</span>)]
-    [<span class="hljs-type">Alias</span>(<span class="hljs-string">"h"</span>)]
+    [<span class="hljs-type">Alias</span>(<span class="hljs-string">'h'</span>)]
     [<span class="hljs-type">Switch</span>]<span class="hljs-variable">$Help</span>
 )
+
+<span class="hljs-keyword">if</span> (<span class="hljs-variable">$Help</span> <span class="hljs-operator">-or</span> (<span class="hljs-variable">$PSCmdlet</span>.ParameterSetName <span class="hljs-operator">-eq</span> <span class="hljs-string">'HelpText'</span>)) {
+    <span class="hljs-built_in">Get-Help</span> <span class="hljs-literal">-Name</span> <span class="hljs-variable">$MyInvocation</span>.MyCommand.Path <span class="hljs-literal">-Full</span>
+    <span class="hljs-keyword">exit</span> <span class="hljs-number">0</span>
+}
+
+<span class="hljs-variable">$EmbeddedArchive</span> = <span class="hljs-string">@'
+__PYSHIM_EMBEDDED_ARCHIVE__
+'@</span>
+
+<span class="hljs-built_in">Add-Type</span> <span class="hljs-literal">-AssemblyName</span> System.IO.Compression.FileSystem
+
+<span class="hljs-function"><span class="hljs-keyword">function</span> <span class="hljs-title">Add-PyshimPathEntry</span></span> {
+    <span class="hljs-keyword">Param</span>(
+        [<span class="hljs-type">Parameter</span>(<span class="hljs-type">Mandatory</span>=<span class="hljs-variable">$true</span>)]
+        [<span class="hljs-type">System.String</span>]<span class="hljs-variable">$TargetPath</span>,
+
+        [<span class="hljs-type">Parameter</span>(<span class="hljs-type">Mandatory</span>=<span class="hljs-variable">$true</span>)]
+        [<span class="hljs-type">System.String</span>]<span class="hljs-variable">$CurrentUserPath</span>
+    )
+
+    <span class="hljs-variable">$SplitPaths</span> = <span class="hljs-selector-tag">@</span>()
+    <span class="hljs-keyword">if</span> (<span class="hljs-variable">$CurrentUserPath</span>) {
+        <span class="hljs-variable">$SplitPaths</span> = <span class="hljs-variable">$CurrentUserPath</span> <span class="hljs-operator">-split</span> <span class="hljs-string">';'</span>
+    }
+
+    <span class="hljs-keyword">if</span> (<span class="hljs-operator">-not</span> (<span class="hljs-variable">$SplitPaths</span> | <span class="hljs-built_in">Where-Object</span> { <span class="hljs-variable">$_</span>.TrimEnd(<span class="hljs-string">'\\'</span>) <span class="hljs-operator">-ieq</span> <span class="hljs-variable">$TargetPath</span>.TrimEnd(<span class="hljs-string">'\\'</span>) })) {
+        <span class="hljs-variable">$SplitPaths</span> = <span class="hljs-selector-tag">@</span>(<span class="hljs-variable">$SplitPaths</span> | <span class="hljs-built_in">Where-Object</span> { <span class="hljs-variable">$_</span> }) + <span class="hljs-variable">$TargetPath</span>
+    }
+
+    <span class="hljs-keyword">return</span> (<span class="hljs-variable">$SplitPaths</span> | <span class="hljs-built_in">Where-Object</span> { <span class="hljs-variable">$_</span> }) <span class="hljs-operator">-join</span> <span class="hljs-string">';'</span>
+}
+
+<span class="hljs-function"><span class="hljs-keyword">function</span> <span class="hljs-title">Get-PyshimPathScopes</span></span> {
+    <span class="hljs-keyword">Param</span>()
+
+    <span class="hljs-keyword">return</span> [<span class="hljs-type">PSCustomObject</span>]<span class="hljs-selector-tag">@</span>{
+        <span class="hljs-keyword">Process</span> = <span class="hljs-variable">$env:Path</span>
+        User    = [<span class="hljs-type">Environment</span>]::GetEnvironmentVariable(<span class="hljs-string">'Path'</span>,<span class="hljs-string">'User'</span>)
+        Machine = [<span class="hljs-type">Environment</span>]::GetEnvironmentVariable(<span class="hljs-string">'Path'</span>,<span class="hljs-string">'Machine'</span>)
+    }
+}
+
+<span class="hljs-function"><span class="hljs-keyword">function</span> <span class="hljs-title">Test-PyshimPathPresence</span></span> {
+    <span class="hljs-keyword">Param</span>(
+        [<span class="hljs-type">Parameter</span>(<span class="hljs-type">Mandatory</span>=<span class="hljs-variable">$true</span>)]
+        [<span class="hljs-type">System.String</span>]<span class="hljs-variable">$TargetPath</span>,
+
+        [<span class="hljs-type">Parameter</span>(<span class="hljs-type">Mandatory</span>=<span class="hljs-variable">$true</span>)]
+        [<span class="hljs-type">System.String</span>[]]<span class="hljs-variable">$Scopes</span>
+    )
+
+    <span class="hljs-keyword">foreach</span> (<span class="hljs-variable">$Scope</span> <span class="hljs-keyword">in</span> <span class="hljs-variable">$Scopes</span>) {
+        <span class="hljs-keyword">if</span> (<span class="hljs-operator">-not</span> <span class="hljs-variable">$Scope</span>) {
+            <span class="hljs-keyword">continue</span>
+        }
+
+        <span class="hljs-variable">$Entries</span> = <span class="hljs-variable">$Scope</span> <span class="hljs-operator">-split</span> <span class="hljs-string">';'</span>
+        <span class="hljs-keyword">if</span> (<span class="hljs-variable">$Entries</span> | <span class="hljs-built_in">Where-Object</span> { <span class="hljs-variable">$_</span>.TrimEnd(<span class="hljs-string">'\\'</span>) <span class="hljs-operator">-ieq</span> <span class="hljs-variable">$TargetPath</span>.TrimEnd(<span class="hljs-string">'\\'</span>) }) {
+            <span class="hljs-keyword">return</span> <span class="hljs-variable">$true</span>
+        }
+    }
+
+    <span class="hljs-keyword">return</span> <span class="hljs-variable">$false</span>
+}
+
+<span class="hljs-function"><span class="hljs-keyword">function</span> <span class="hljs-title">Expand-PyshimArchive</span></span> {
+    <span class="hljs-keyword">Param</span>(
+        [<span class="hljs-type">Parameter</span>(<span class="hljs-type">Mandatory</span>=<span class="hljs-variable">$true</span>)]
+        [<span class="hljs-type">System.String</span>]<span class="hljs-variable">$DestinationPath</span>
+    )
+
+    <span class="hljs-variable">$Bytes</span> = [<span class="hljs-type">Convert</span>]::FromBase64String(<span class="hljs-variable">$EmbeddedArchive</span>)
+    <span class="hljs-variable">$ZipPath</span> = [<span class="hljs-type">IO.Path</span>]::GetTempFileName()
+    <span class="hljs-keyword">try</span> {
+        [<span class="hljs-type">IO.File</span>]::WriteAllBytes(<span class="hljs-variable">$ZipPath</span>,<span class="hljs-variable">$Bytes</span>)
+        [<span class="hljs-type">IO.Compression.ZipFile</span>]::ExtractToDirectory(<span class="hljs-variable">$ZipPath</span>,<span class="hljs-variable">$DestinationPath</span>,<span class="hljs-variable">$true</span>)
+    } <span class="hljs-keyword">finally</span> {
+        <span class="hljs-keyword">if</span> (<span class="hljs-built_in">Test-Path</span> <span class="hljs-literal">-LiteralPath</span> <span class="hljs-variable">$ZipPath</span>) {
+            <span class="hljs-built_in">Remove-Item</span> <span class="hljs-literal">-LiteralPath</span> <span class="hljs-variable">$ZipPath</span> <span class="hljs-literal">-Force</span> <span class="hljs-literal">-ErrorAction</span> SilentlyContinue
+        }
+    }
+}
+
+<span class="hljs-variable">$ShimDir</span> = <span class="hljs-string">'C:\bin\shims'</span>
+<span class="hljs-variable">$WorkingRoot</span> = <span class="hljs-built_in">Join-Path</span> <span class="hljs-literal">-Path</span> ([<span class="hljs-type">IO.Path</span>]::GetTempPath()) <span class="hljs-literal">-ChildPath</span> (<span class="hljs-string">"pyshim_"</span> + [<span class="hljs-type">Guid</span>]::NewGuid().ToString(<span class="hljs-string">'N'</span>))
+<span class="hljs-variable">$Null</span> = <span class="hljs-built_in">New-Item</span> <span class="hljs-literal">-ItemType</span> Directory <span class="hljs-literal">-Path</span> <span class="hljs-variable">$WorkingRoot</span> <span class="hljs-literal">-Force</span>
+
+<span class="hljs-keyword">try</span> {
+    <span class="hljs-built_in">Expand-PyshimArchive</span> <span class="hljs-literal">-DestinationPath</span> <span class="hljs-variable">$WorkingRoot</span>
+    <span class="hljs-variable">$PayloadSource</span> = <span class="hljs-variable">$WorkingRoot</span>
+
+    <span class="hljs-keyword">if</span> (<span class="hljs-operator">-not</span> (<span class="hljs-built_in">Test-Path</span> <span class="hljs-literal">-LiteralPath</span> <span class="hljs-variable">$ShimDir</span>)) {
+        <span class="hljs-keyword">if</span> (<span class="hljs-variable">$PSCmdlet</span>.ShouldProcess(<span class="hljs-variable">$ShimDir</span>,<span class="hljs-string">'Create shim directory'</span>)) {
+            <span class="hljs-built_in">New-Item</span> <span class="hljs-literal">-ItemType</span> Directory <span class="hljs-literal">-Path</span> <span class="hljs-variable">$ShimDir</span> <span class="hljs-literal">-Force</span> | <span class="hljs-built_in">Out-Null</span>
+        }
+    }
+
+    <span class="hljs-keyword">if</span> (<span class="hljs-variable">$PSCmdlet</span>.ShouldProcess(<span class="hljs-variable">$ShimDir</span>,<span class="hljs-string">'Copy embedded shims'</span>)) {
+        <span class="hljs-built_in">Copy-Item</span> <span class="hljs-literal">-Path</span> (<span class="hljs-built_in">Join-Path</span> <span class="hljs-literal">-Path</span> <span class="hljs-variable">$PayloadSource</span> <span class="hljs-literal">-ChildPath</span> <span class="hljs-string">'*'</span>) <span class="hljs-literal">-Destination</span> <span class="hljs-variable">$ShimDir</span> <span class="hljs-literal">-Recurse</span> <span class="hljs-literal">-Force</span>
+    }
+} <span class="hljs-keyword">finally</span> {
+    <span class="hljs-keyword">if</span> (<span class="hljs-built_in">Test-Path</span> <span class="hljs-literal">-LiteralPath</span> <span class="hljs-variable">$WorkingRoot</span>) {
+        <span class="hljs-built_in">Remove-Item</span> <span class="hljs-literal">-LiteralPath</span> <span class="hljs-variable">$WorkingRoot</span> <span class="hljs-literal">-Recurse</span> <span class="hljs-literal">-Force</span> <span class="hljs-literal">-ErrorAction</span> SilentlyContinue
+    }
+}
+
+<span class="hljs-variable">$PathScopes</span> = <span class="hljs-built_in">Get-PyshimPathScopes</span>
+<span class="hljs-variable">$AllScopes</span> = <span class="hljs-selector-tag">@</span>(<span class="hljs-variable">$PathScopes</span>.Process,<span class="hljs-variable">$PathScopes</span>.User,<span class="hljs-variable">$PathScopes</span>.Machine)
+<span class="hljs-variable">$PathPresent</span> = <span class="hljs-built_in">Test-PyshimPathPresence</span> <span class="hljs-literal">-TargetPath</span> <span class="hljs-variable">$ShimDir</span> <span class="hljs-literal">-Scopes</span> <span class="hljs-variable">$AllScopes</span>
+
+<span class="hljs-keyword">if</span> (<span class="hljs-variable">$PathPresent</span>) {
+    <span class="hljs-built_in">Write-Host</span> <span class="hljs-string">"C:\bin\shims already present in PATH."</span> <span class="hljs-literal">-ForegroundColor</span> Green
+    <span class="hljs-keyword">exit</span> <span class="hljs-number">0</span>
+}
+
+<span class="hljs-variable">$ShouldWritePath</span> = <span class="hljs-variable">$false</span>
+<span class="hljs-keyword">if</span> (<span class="hljs-variable">$WritePath</span>) {
+    <span class="hljs-variable">$ShouldWritePath</span> = <span class="hljs-variable">$true</span>
+} <span class="hljs-keyword">else</span> {
+    <span class="hljs-variable">$Response</span> = <span class="hljs-built_in">Read-Host</span> <span class="hljs-string">"Add 'C:\bin\shims' to your user PATH? [y/N]"</span>
+    <span class="hljs-keyword">if</span> (<span class="hljs-variable">$Response</span> <span class="hljs-operator">-and</span> (<span class="hljs-variable">$Response</span>.Trim() <span class="hljs-operator">-match</span> <span class="hljs-string">'^(y|yes)$'</span>)) {
+        <span class="hljs-variable">$ShouldWritePath</span> = <span class="hljs-variable">$true</span>
+    }
+}
+
+<span class="hljs-keyword">if</span> (<span class="hljs-variable">$ShouldWritePath</span>) {
+    <span class="hljs-keyword">if</span> (<span class="hljs-variable">$PSCmdlet</span>.ShouldProcess(<span class="hljs-string">'User PATH'</span>,<span class="hljs-string">'Append shim directory'</span>)) {
+        <span class="hljs-variable">$NewUserPath</span> = <span class="hljs-built_in">Add-PyshimPathEntry</span> <span class="hljs-literal">-TargetPath</span> <span class="hljs-variable">$ShimDir</span> <span class="hljs-literal">-CurrentUserPath</span> <span class="hljs-variable">$PathScopes</span>.User
+        [<span class="hljs-type">Environment</span>]::SetEnvironmentVariable(<span class="hljs-string">'Path'</span>,<span class="hljs-variable">$NewUserPath</span>,<span class="hljs-string">'User'</span>)
+        <span class="hljs-variable">$EnvEntries</span> = <span class="hljs-variable">$env:Path</span> <span class="hljs-operator">-split</span> <span class="hljs-string">';'</span>
+        <span class="hljs-keyword">if</span> (<span class="hljs-operator">-not</span> (<span class="hljs-variable">$EnvEntries</span> | <span class="hljs-built_in">Where-Object</span> { <span class="hljs-variable">$_</span>.TrimEnd(<span class="hljs-string">'\\'</span>) <span class="hljs-operator">-ieq</span> <span class="hljs-variable">$ShimDir</span>.TrimEnd(<span class="hljs-string">'\\'</span>) })) {
+            <span class="hljs-variable">$env:Path</span> = (<span class="hljs-variable">$EnvEntries</span> + <span class="hljs-variable">$ShimDir</span> | <span class="hljs-built_in">Where-Object</span> { <span class="hljs-variable">$_</span> }) <span class="hljs-operator">-join</span> <span class="hljs-string">';'</span>
+        }
+        <span class="hljs-built_in">Write-Host</span> <span class="hljs-string">"Added 'C:\bin\shims' to the user PATH. Restart existing shells."</span> <span class="hljs-literal">-ForegroundColor</span> Green
+    }
+    <span class="hljs-keyword">exit</span> <span class="hljs-number">0</span>
+} <span class="hljs-keyword">else</span> {
+    <span class="hljs-built_in">Write-Host</span> <span class="hljs-string">"Skipped PATH update. To add it later run:"</span> <span class="hljs-literal">-ForegroundColor</span> Yellow
+    <span class="hljs-built_in">Write-Host</span> <span class="hljs-string">"    [Environment]::SetEnvironmentVariable('Path',( '{0};' + [Environment]::GetEnvironmentVariable('Path','User')).Trim(';'),'User')"</span> <span class="hljs-operator">-f</span> <span class="hljs-variable">$ShimDir</span>
+    <span class="hljs-keyword">exit</span> <span class="hljs-number">0</span>
+}
 </div></code></pre>
-<ul>
-<li><strong>Named Parameter Groups:</strong> Organize parameters into logical groups using the <code>ParameterSetName</code> attribute. This helps clarify which parameters can be used together and improves usability and discoverability from within the standard Help Text generator.</li>
-<li><strong>Parameter Attributes:</strong> Use attributes like <code>[Parameter(Mandatory=$true)]</code> to enforce required parameters within the context of named parameter groups. The Help text parameter (<code>-Help</code>) should always inhabit a <code>HelpText</code> parameter group and be mandatory within that group.</li>
-<li><strong>Parameter Aliases:</strong> Provide common, best-practice aliases for parameters to improve usability (e.g., <code>[Alias(&quot;f&quot;,&quot;file&quot;,&quot;inputfile&quot;)]</code>) but carefully avoid overly generic aliases that could conflict with other parameters. Conflicts in parameter names and aliases should be strongly avoided. Always remember that parameters are case-insensitive in PowerShell
-<ul>
-<li>Example: Including both <code>-File</code> and <code>-file</code> aliases would break the script or function.</li>
-</ul>
-</li>
-<li><strong>Type Constraints:</strong> Strongly type all parameters (e.g., <code>[System.String]</code>, <code>[System.Boolean]</code>, <code>[Switch]</code>).</li>
-<li><strong>Default Values:</strong> If an input has a highly-likely default value, assign default values to optional parameters directly in the <code>Param()</code> block (e.g., <code>$Verbosity = $true</code>) and avoid assigning defaults to mandatory parameters (as this angers the syntax parsers in Visual Studio).</li>
-</ul>
-<h4 id="self-awareness-variables">Self-Awareness Variables</h4>
-<p>For effective logging and verbosity, functions and scripts should all declare &quot;self-awareness&quot; variables at the beginning to establish a caller reference string. This is especially important for nested functions to create a logical call stack.</p>
-<p>Example self-awareness variable declarations:</p>
-<pre class="hljs"><code><div><span class="hljs-comment">## Internal self-awareness variables for use in verbosity and logging</span>
-<span class="hljs-keyword">$this</span>FunctionReference = <span class="hljs-string">"{0}"</span> <span class="hljs-operator">-f</span> <span class="hljs-variable">$MyInvocation</span>.MyCommand
-<span class="hljs-keyword">$this</span>Sub<span class="hljs-function"><span class="hljs-keyword">Function</span> = "</span>{<span class="hljs-number">0</span>}<span class="hljs-string">" -f <span class="hljs-variable">$MyInvocation</span>.MyCommand
-<span class="hljs-keyword">$this</span>Function = if (<span class="hljs-variable">$null</span> -eq <span class="hljs-keyword">$this</span>Function) { <span class="hljs-keyword">$this</span>SubFunction } else { -join("</span><span class="hljs-keyword">$this</span>Function<span class="hljs-string">", "</span>:<span class="hljs-string">", "</span><span class="hljs-keyword">$this</span>SubFunction<span class="hljs-string">") }
-</span></div></code></pre>
 <h2 id="promptmake-promptcodereferenceps1"><code>.\prompt\Make-PromptCodeReference.ps1</code></h2>
 <pre class="hljs"><code><div><span class="hljs-comment">&lt;#
 <span class="hljs-doctag">.SYNOPSIS</span>
@@ -1098,9 +1321,14 @@ if ((<span class="hljs-variable">$Help</span>) -or (<span class="hljs-variable">
 Write-Host "</span>Generating Prompt Code Reference from project root files...<span class="hljs-string">" -ForegroundColor Green
 Write-Host "</span>  Target directory: <span class="hljs-variable">$</span>(<span class="hljs-built_in">Resolve-Path</span> <span class="hljs-literal">-LiteralPath</span> <span class="hljs-variable">$ProjectRoot</span>)<span class="hljs-string">" -ForegroundColor Cyan
 
-# Delete existing output file if it exists to prevent it from being included in processing
-if (Test-Path -LiteralPath <span class="hljs-variable">$OutputFile</span>) {
-    Remove-Item -LiteralPath <span class="hljs-variable">$OutputFile</span> -Force -ErrorAction SilentlyContinue
+# Purge any existing prompt artifacts before generating new output
+<span class="hljs-variable">$CleanupPattern</span> = 'Prompt-Code-Reference*'
+<span class="hljs-variable">$ExistingArtifacts</span> = Get-ChildItem -LiteralPath <span class="hljs-variable">$PSScriptRoot</span> -Filter <span class="hljs-variable">$CleanupPattern</span> -File -ErrorAction SilentlyContinue
+if (<span class="hljs-variable">$ExistingArtifacts</span>) {
+    Write-Host "</span>  Removing <span class="hljs-variable">$</span>(<span class="hljs-variable">$ExistingArtifacts</span>.Count) existing prompt artifact(s)...<span class="hljs-string">" -ForegroundColor Yellow
+    foreach (<span class="hljs-variable">$Artifact</span> in <span class="hljs-variable">$ExistingArtifacts</span>) {
+        Remove-Item -LiteralPath <span class="hljs-variable">$Artifact</span>.FullName -Force -ErrorAction SilentlyContinue
+    }
 }
 
 # Get all files from project root (recursive if -Recurse specified)
@@ -1291,6 +1519,251 @@ Write-Host "</span>  Found <span class="hljs-variable">$</span>(<span class="hlj
 <span class="hljs-keyword">catch</span> {
     <span class="hljs-built_in">Write-Error</span> <span class="hljs-string">"Failed to write output file: <span class="hljs-variable">$_</span>"</span>
     <span class="hljs-keyword">exit</span> <span class="hljs-number">1</span>
+}
+</div></code></pre>
+<h2 id="binmake-pyshimps1"><code>.\bin\Make-Pyshim.ps1</code></h2>
+<pre class="hljs"><code><div><span class="hljs-comment">&lt;#
+<span class="hljs-doctag">.SYNOPSIS</span>
+    Install the pyshim shims and optionally wire them into the user PATH.
+<span class="hljs-doctag">.DESCRIPTION</span>
+    Copies all files from the repository shim folder (`bin/shims`) into the
+    fixed installation directory (`C:\bin\shims`). Existing files are
+    overwritten. If the target directory does not exist it is created.
+
+    After copying, the script validates whether `C:\bin\shims` already lives
+    in the effective PATH (process, user, or machine scopes). If the entry is
+    missing you can either supply `-WritePath` up front or respond to the
+    interactive prompt to append it to the user PATH. Refusing the update
+    prints the manual command you need to run yourself.
+<span class="hljs-doctag">.PARAMETER WritePath</span>
+    Automatically append `C:\bin\shims` to the user PATH when it is missing.
+    Without this switch the script will prompt for confirmation.
+<span class="hljs-doctag">.PARAMETER Help</span>
+    Display the full help text for this script.
+<span class="hljs-doctag">.EXAMPLE</span>
+    .\Make-Pyshim.ps1 -WritePath
+
+    Copies the shims into place and appends `C:\bin\shims` to the user PATH if
+    it is not already present.
+.#&gt;</span>
+<span class="hljs-function">[<span class="hljs-type">CmdletBinding</span>(<span class="hljs-type">SupportsShouldProcess</span>=<span class="hljs-variable">$true</span>,<span class="hljs-type">ConfirmImpact</span>=<span class="hljs-string">'None'</span>,<span class="hljs-type">DefaultParameterSetName</span>=<span class="hljs-string">'Default'</span>)]</span>
+<span class="hljs-keyword">Param</span>(
+    [<span class="hljs-type">Parameter</span>(<span class="hljs-type">Mandatory</span>=<span class="hljs-variable">$false</span>,<span class="hljs-type">ParameterSetName</span>=<span class="hljs-string">'Default'</span>)]
+    [<span class="hljs-type">Alias</span>(<span class="hljs-string">"Path"</span>,<span class="hljs-string">"P"</span>)]
+    [<span class="hljs-type">Switch</span>]<span class="hljs-variable">$WritePath</span>,
+
+    [<span class="hljs-type">Parameter</span>(<span class="hljs-type">Mandatory</span>=<span class="hljs-variable">$true</span>,<span class="hljs-type">ParameterSetName</span>=<span class="hljs-string">'HelpText'</span>)]
+    [<span class="hljs-type">Alias</span>(<span class="hljs-string">"h"</span>)]
+    [<span class="hljs-type">Switch</span>]<span class="hljs-variable">$Help</span>
+)
+
+<span class="hljs-comment"># Catch Help Text Requests</span>
+<span class="hljs-keyword">if</span> ((<span class="hljs-variable">$Help</span>) <span class="hljs-operator">-or</span> (<span class="hljs-variable">$PSCmdlet</span>.ParameterSetName <span class="hljs-operator">-eq</span> <span class="hljs-string">'HelpText'</span>)) {
+    <span class="hljs-built_in">Get-Help</span> <span class="hljs-literal">-Name</span> <span class="hljs-variable">$MyInvocation</span>.MyCommand.Path <span class="hljs-literal">-Full</span>
+    <span class="hljs-keyword">Exit</span> <span class="hljs-number">0</span>
+}
+
+<span class="hljs-comment"># Internal self-awareness variables for verbosity/logging</span>
+<span class="hljs-keyword">$this</span>FunctionReference = <span class="hljs-string">"{0}"</span> <span class="hljs-operator">-f</span> <span class="hljs-variable">$MyInvocation</span>.MyCommand
+<span class="hljs-keyword">$this</span>Script = <span class="hljs-keyword">$this</span>FunctionReference
+
+<span class="hljs-function"><span class="hljs-keyword">function</span> <span class="hljs-title">Add-PyshimPathEntry</span></span> {
+    <span class="hljs-keyword">Param</span>(
+        [<span class="hljs-type">Parameter</span>(<span class="hljs-type">Mandatory</span>=<span class="hljs-variable">$true</span>)]
+        [<span class="hljs-type">System.String</span>]<span class="hljs-variable">$TargetPath</span>,
+
+        [<span class="hljs-type">Parameter</span>(<span class="hljs-type">Mandatory</span>=<span class="hljs-variable">$true</span>)]
+        [<span class="hljs-type">System.String</span>]<span class="hljs-variable">$CurrentUserPath</span>
+    )
+
+    <span class="hljs-variable">$SplitPaths</span> = <span class="hljs-selector-tag">@</span>()
+    <span class="hljs-keyword">if</span> (<span class="hljs-variable">$CurrentUserPath</span>) {
+        <span class="hljs-variable">$SplitPaths</span> = <span class="hljs-variable">$CurrentUserPath</span> <span class="hljs-operator">-split</span> <span class="hljs-string">';'</span>
+    }
+
+    <span class="hljs-keyword">if</span> (<span class="hljs-operator">-not</span> (<span class="hljs-variable">$SplitPaths</span> | <span class="hljs-built_in">Where-Object</span> { <span class="hljs-variable">$_</span>.TrimEnd(<span class="hljs-string">'\'</span>) <span class="hljs-operator">-ieq</span> <span class="hljs-variable">$TargetPath</span>.TrimEnd(<span class="hljs-string">'\'</span>) })) {
+        <span class="hljs-variable">$SplitPaths</span> = <span class="hljs-selector-tag">@</span>(<span class="hljs-variable">$SplitPaths</span> | <span class="hljs-built_in">Where-Object</span> { <span class="hljs-variable">$_</span> }) + <span class="hljs-variable">$TargetPath</span>
+    }
+
+    <span class="hljs-keyword">return</span> (<span class="hljs-variable">$SplitPaths</span> | <span class="hljs-built_in">Where-Object</span> { <span class="hljs-variable">$_</span> }) <span class="hljs-operator">-join</span> <span class="hljs-string">';'</span>
+}
+
+<span class="hljs-function"><span class="hljs-keyword">function</span> <span class="hljs-title">Get-PyshimPathScopes</span></span> {
+    <span class="hljs-keyword">Param</span>()
+
+    <span class="hljs-keyword">return</span> [<span class="hljs-type">PSCustomObject</span>]<span class="hljs-selector-tag">@</span>{
+        <span class="hljs-keyword">Process</span> = <span class="hljs-variable">$env:Path</span>
+        User    = [<span class="hljs-type">Environment</span>]::GetEnvironmentVariable(<span class="hljs-string">'Path'</span>,<span class="hljs-string">'User'</span>)
+        Machine = [<span class="hljs-type">Environment</span>]::GetEnvironmentVariable(<span class="hljs-string">'Path'</span>,<span class="hljs-string">'Machine'</span>)
+    }
+}
+
+<span class="hljs-function"><span class="hljs-keyword">function</span> <span class="hljs-title">Test-PyshimPathPresence</span></span> {
+    <span class="hljs-keyword">Param</span>(
+        [<span class="hljs-type">Parameter</span>(<span class="hljs-type">Mandatory</span>=<span class="hljs-variable">$true</span>)]
+        [<span class="hljs-type">System.String</span>]<span class="hljs-variable">$TargetPath</span>,
+
+        [<span class="hljs-type">Parameter</span>(<span class="hljs-type">Mandatory</span>=<span class="hljs-variable">$true</span>)]
+        [<span class="hljs-type">System.String</span>[]]<span class="hljs-variable">$Scopes</span>
+    )
+
+    <span class="hljs-keyword">foreach</span> (<span class="hljs-variable">$Scope</span> <span class="hljs-keyword">in</span> <span class="hljs-variable">$Scopes</span>) {
+        <span class="hljs-keyword">if</span> (<span class="hljs-operator">-not</span> <span class="hljs-variable">$Scope</span>) {
+            <span class="hljs-keyword">continue</span>
+        }
+
+        <span class="hljs-variable">$Entries</span> = <span class="hljs-variable">$Scope</span> <span class="hljs-operator">-split</span> <span class="hljs-string">';'</span>
+        <span class="hljs-keyword">if</span> (<span class="hljs-variable">$Entries</span> | <span class="hljs-built_in">Where-Object</span> { <span class="hljs-variable">$_</span>.TrimEnd(<span class="hljs-string">'\'</span>) <span class="hljs-operator">-ieq</span> <span class="hljs-variable">$TargetPath</span>.TrimEnd(<span class="hljs-string">'\'</span>) }) {
+            <span class="hljs-keyword">return</span> <span class="hljs-variable">$true</span>
+        }
+    }
+
+    <span class="hljs-keyword">return</span> <span class="hljs-variable">$false</span>
+}
+
+<span class="hljs-variable">$ShimDir</span> = <span class="hljs-string">'C:\bin\shims'</span>
+<span class="hljs-variable">$SourceDir</span> = <span class="hljs-built_in">Join-Path</span> <span class="hljs-literal">-Path</span> <span class="hljs-variable">$PSScriptRoot</span> <span class="hljs-literal">-ChildPath</span> <span class="hljs-string">'shims'</span>
+
+<span class="hljs-keyword">if</span> (<span class="hljs-operator">-not</span> (<span class="hljs-built_in">Test-Path</span> <span class="hljs-literal">-LiteralPath</span> <span class="hljs-variable">$SourceDir</span>)) {
+    <span class="hljs-keyword">throw</span> <span class="hljs-string">"Shim source directory '<span class="hljs-variable">$SourceDir</span>' was not found."</span>
+}
+
+<span class="hljs-keyword">if</span> (<span class="hljs-operator">-not</span> (<span class="hljs-built_in">Test-Path</span> <span class="hljs-literal">-LiteralPath</span> <span class="hljs-variable">$ShimDir</span>)) {
+    <span class="hljs-keyword">if</span> (<span class="hljs-variable">$PSCmdlet</span>.ShouldProcess(<span class="hljs-variable">$ShimDir</span>,<span class="hljs-string">'Create shim directory'</span>)) {
+        <span class="hljs-built_in">New-Item</span> <span class="hljs-literal">-ItemType</span> Directory <span class="hljs-literal">-Path</span> <span class="hljs-variable">$ShimDir</span> <span class="hljs-literal">-Force</span> | <span class="hljs-built_in">Out-Null</span>
+    }
+}
+
+<span class="hljs-variable">$CopySource</span> = <span class="hljs-built_in">Join-Path</span> <span class="hljs-literal">-Path</span> <span class="hljs-variable">$SourceDir</span> <span class="hljs-literal">-ChildPath</span> <span class="hljs-string">'*'</span>
+<span class="hljs-keyword">if</span> (<span class="hljs-variable">$PSCmdlet</span>.ShouldProcess(<span class="hljs-variable">$ShimDir</span>,<span class="hljs-string">'Copy shim files'</span>)) {
+    <span class="hljs-built_in">Copy-Item</span> <span class="hljs-literal">-Path</span> <span class="hljs-variable">$CopySource</span> <span class="hljs-literal">-Destination</span> <span class="hljs-variable">$ShimDir</span> <span class="hljs-literal">-Recurse</span> <span class="hljs-literal">-Force</span>
+    <span class="hljs-built_in">Write-Verbose</span> <span class="hljs-string">"[<span class="hljs-keyword">$this</span>Script] Copied shims from '<span class="hljs-variable">$SourceDir</span>' to '<span class="hljs-variable">$ShimDir</span>'."</span>
+}
+
+<span class="hljs-variable">$PathScopes</span> = <span class="hljs-built_in">Get-PyshimPathScopes</span>
+<span class="hljs-variable">$AllScopes</span> = <span class="hljs-selector-tag">@</span>(<span class="hljs-variable">$PathScopes</span>.Process,<span class="hljs-variable">$PathScopes</span>.User,<span class="hljs-variable">$PathScopes</span>.Machine)
+<span class="hljs-variable">$PathPresent</span> = <span class="hljs-built_in">Test-PyshimPathPresence</span> <span class="hljs-literal">-TargetPath</span> <span class="hljs-variable">$ShimDir</span> <span class="hljs-literal">-Scopes</span> <span class="hljs-variable">$AllScopes</span>
+
+<span class="hljs-keyword">if</span> (<span class="hljs-variable">$PathPresent</span>) {
+    <span class="hljs-built_in">Write-Verbose</span> <span class="hljs-string">"[<span class="hljs-keyword">$this</span>Script] Shim directory already present in PATH."</span>
+    <span class="hljs-keyword">return</span>
+}
+
+<span class="hljs-variable">$ShouldWritePath</span> = <span class="hljs-variable">$false</span>
+<span class="hljs-keyword">if</span> (<span class="hljs-variable">$WritePath</span>) {
+    <span class="hljs-variable">$ShouldWritePath</span> = <span class="hljs-variable">$true</span>
+} <span class="hljs-keyword">else</span> {
+    <span class="hljs-variable">$Response</span> = <span class="hljs-built_in">Read-Host</span> <span class="hljs-string">"Add '<span class="hljs-variable">$ShimDir</span>' to your user PATH? [y/N]"</span>
+    <span class="hljs-keyword">if</span> (<span class="hljs-variable">$Response</span> <span class="hljs-operator">-and</span> (<span class="hljs-variable">$Response</span>.Trim() <span class="hljs-operator">-match</span> <span class="hljs-string">'^(y|yes)$'</span>)) {
+        <span class="hljs-variable">$ShouldWritePath</span> = <span class="hljs-variable">$true</span>
+    }
+}
+
+<span class="hljs-keyword">if</span> (<span class="hljs-variable">$ShouldWritePath</span>) {
+    <span class="hljs-keyword">if</span> (<span class="hljs-variable">$PSCmdlet</span>.ShouldProcess(<span class="hljs-string">'User PATH'</span>,<span class="hljs-string">'Append shim directory'</span>)) {
+        <span class="hljs-variable">$NewUserPath</span> = <span class="hljs-built_in">Add-PyshimPathEntry</span> <span class="hljs-literal">-TargetPath</span> <span class="hljs-variable">$ShimDir</span> <span class="hljs-literal">-CurrentUserPath</span> <span class="hljs-variable">$PathScopes</span>.User
+        [<span class="hljs-type">Environment</span>]::SetEnvironmentVariable(<span class="hljs-string">'Path'</span>,<span class="hljs-variable">$NewUserPath</span>,<span class="hljs-string">'User'</span>)
+        <span class="hljs-variable">$EnvEntries</span> = <span class="hljs-variable">$env:Path</span> <span class="hljs-operator">-split</span> <span class="hljs-string">';'</span>
+        <span class="hljs-keyword">if</span> (<span class="hljs-operator">-not</span> (<span class="hljs-variable">$EnvEntries</span> | <span class="hljs-built_in">Where-Object</span> { <span class="hljs-variable">$_</span>.TrimEnd(<span class="hljs-string">'\'</span>) <span class="hljs-operator">-ieq</span> <span class="hljs-variable">$ShimDir</span>.TrimEnd(<span class="hljs-string">'\'</span>) })) {
+            <span class="hljs-variable">$env:Path</span> = (<span class="hljs-variable">$EnvEntries</span> + <span class="hljs-variable">$ShimDir</span> | <span class="hljs-built_in">Where-Object</span> { <span class="hljs-variable">$_</span> }) <span class="hljs-operator">-join</span> <span class="hljs-string">';'</span>
+        }
+        <span class="hljs-built_in">Write-Host</span> <span class="hljs-string">"Added '<span class="hljs-variable">$ShimDir</span>' to the user PATH. Restart shells that were already open."</span>
+    }
+} <span class="hljs-keyword">else</span> {
+    <span class="hljs-built_in">Write-Host</span> <span class="hljs-string">"Skipping PATH update. To add it later run:`n  [Environment]::SetEnvironmentVariable('Path',( '{0};' + [Environment]::GetEnvironmentVariable('Path','User')).Trim(';'),'User')"</span> <span class="hljs-operator">-f</span> <span class="hljs-variable">$ShimDir</span>
+}
+</div></code></pre>
+<h2 id="toolsnew-pyshiminstallerps1"><code>.\tools\New-PyshimInstaller.ps1</code></h2>
+<pre class="hljs"><code><div><span class="hljs-comment">&lt;#
+<span class="hljs-doctag">.SYNOPSIS</span>
+    Generates the single-file Install-Pyshim.ps1 installer for release builds.
+<span class="hljs-doctag">.DESCRIPTION</span>
+    Zips the repository's bin/shims directory, converts it to Base64, and injects
+    the payload into tools/Install-Pyshim.template.ps1. The rendered installer is
+    written to dist/Install-Pyshim.ps1 (or a custom destination when specified).
+<span class="hljs-doctag">.PARAMETER OutputPath</span>
+    Optional destination for the generated installer. Defaults to dist/Install-Pyshim.ps1
+    relative to the repository root.
+<span class="hljs-doctag">.PARAMETER Force</span>
+    Overwrite the output file if it already exists.
+<span class="hljs-doctag">.EXAMPLE</span>
+    pwsh ./tools/New-PyshimInstaller.ps1
+
+    Writes dist/Install-Pyshim.ps1 with the current shims payload embedded.
+<span class="hljs-doctag">.EXAMPLE</span>
+    pwsh ./tools/New-PyshimInstaller.ps1 -OutputPath ./Install-Pyshim.ps1 -Force
+
+    Generates the installer at the repository root, overwriting any existing file.
+#&gt;</span>
+<span class="hljs-function">[<span class="hljs-type">CmdletBinding</span>()]</span>
+<span class="hljs-keyword">Param</span>(
+    [<span class="hljs-type">Parameter</span>(<span class="hljs-type">Mandatory</span>=<span class="hljs-variable">$false</span>)]
+    [<span class="hljs-type">System.String</span>]<span class="hljs-variable">$OutputPath</span>,
+
+    [<span class="hljs-type">Parameter</span>(<span class="hljs-type">Mandatory</span>=<span class="hljs-variable">$false</span>)]
+    [<span class="hljs-type">Switch</span>]<span class="hljs-variable">$Force</span>
+)
+
+<span class="hljs-variable">$RepoRoot</span> = <span class="hljs-built_in">Resolve-Path</span> <span class="hljs-literal">-Path</span> (<span class="hljs-built_in">Join-Path</span> <span class="hljs-literal">-Path</span> <span class="hljs-variable">$PSScriptRoot</span> <span class="hljs-literal">-ChildPath</span> <span class="hljs-string">'..'</span>)
+<span class="hljs-variable">$SourceDir</span> = <span class="hljs-built_in">Join-Path</span> <span class="hljs-literal">-Path</span> <span class="hljs-variable">$RepoRoot</span> <span class="hljs-literal">-ChildPath</span> <span class="hljs-string">'bin/shims'</span>
+<span class="hljs-variable">$TemplatePath</span> = <span class="hljs-built_in">Join-Path</span> <span class="hljs-literal">-Path</span> <span class="hljs-variable">$PSScriptRoot</span> <span class="hljs-literal">-ChildPath</span> <span class="hljs-string">'Install-Pyshim.template.ps1'</span>
+
+<span class="hljs-keyword">if</span> (<span class="hljs-operator">-not</span> <span class="hljs-variable">$OutputPath</span>) {
+    <span class="hljs-variable">$OutputDir</span> = <span class="hljs-built_in">Join-Path</span> <span class="hljs-literal">-Path</span> <span class="hljs-variable">$RepoRoot</span> <span class="hljs-literal">-ChildPath</span> <span class="hljs-string">'dist'</span>
+    <span class="hljs-keyword">if</span> (<span class="hljs-operator">-not</span> (<span class="hljs-built_in">Test-Path</span> <span class="hljs-literal">-LiteralPath</span> <span class="hljs-variable">$OutputDir</span>)) {
+        <span class="hljs-built_in">New-Item</span> <span class="hljs-literal">-ItemType</span> Directory <span class="hljs-literal">-Path</span> <span class="hljs-variable">$OutputDir</span> <span class="hljs-literal">-Force</span> | <span class="hljs-built_in">Out-Null</span>
+    }
+    <span class="hljs-variable">$OutputPath</span> = <span class="hljs-built_in">Join-Path</span> <span class="hljs-literal">-Path</span> <span class="hljs-variable">$OutputDir</span> <span class="hljs-literal">-ChildPath</span> <span class="hljs-string">'Install-Pyshim.ps1'</span>
+} <span class="hljs-keyword">else</span> {
+    <span class="hljs-variable">$OutputPath</span> = <span class="hljs-built_in">Resolve-Path</span> <span class="hljs-literal">-Path</span> <span class="hljs-variable">$OutputPath</span> <span class="hljs-literal">-ErrorAction</span> SilentlyContinue <span class="hljs-literal">-OutVariable</span> resolved | <span class="hljs-built_in">Out-Null</span>
+    <span class="hljs-keyword">if</span> (<span class="hljs-variable">$resolved</span>) {
+        <span class="hljs-variable">$OutputPath</span> = <span class="hljs-variable">$resolved</span>.ProviderPath
+    } <span class="hljs-keyword">else</span> {
+        <span class="hljs-variable">$OutputPath</span> = [<span class="hljs-type">IO.Path</span>]::GetFullPath((<span class="hljs-built_in">Join-Path</span> <span class="hljs-literal">-Path</span> (<span class="hljs-built_in">Get-Location</span>) <span class="hljs-literal">-ChildPath</span> <span class="hljs-variable">$OutputPath</span>))
+    }
+}
+
+<span class="hljs-keyword">if</span> (<span class="hljs-operator">-not</span> (<span class="hljs-built_in">Test-Path</span> <span class="hljs-literal">-LiteralPath</span> <span class="hljs-variable">$SourceDir</span>)) {
+    <span class="hljs-keyword">throw</span> <span class="hljs-string">"Shim source directory '<span class="hljs-variable">$SourceDir</span>' was not found."</span>
+}
+
+<span class="hljs-keyword">if</span> (<span class="hljs-operator">-not</span> (<span class="hljs-built_in">Test-Path</span> <span class="hljs-literal">-LiteralPath</span> <span class="hljs-variable">$TemplatePath</span>)) {
+    <span class="hljs-keyword">throw</span> <span class="hljs-string">"Template file '<span class="hljs-variable">$TemplatePath</span>' was not found."</span>
+}
+
+<span class="hljs-keyword">if</span> ((<span class="hljs-built_in">Test-Path</span> <span class="hljs-literal">-LiteralPath</span> <span class="hljs-variable">$OutputPath</span>) <span class="hljs-operator">-and</span> (<span class="hljs-operator">-not</span> <span class="hljs-variable">$Force</span>)) {
+    <span class="hljs-keyword">throw</span> <span class="hljs-string">"Output file '<span class="hljs-variable">$OutputPath</span>' already exists. Use -Force to overwrite."</span>
+}
+
+<span class="hljs-variable">$TempRoot</span> = <span class="hljs-built_in">New-Item</span> <span class="hljs-literal">-ItemType</span> Directory <span class="hljs-literal">-Path</span> (<span class="hljs-built_in">Join-Path</span> ([<span class="hljs-type">IO.Path</span>]::GetTempPath()) (<span class="hljs-string">"pyshim_dist_"</span> + [<span class="hljs-type">Guid</span>]::NewGuid().ToString(<span class="hljs-string">'N'</span>))) <span class="hljs-literal">-Force</span>
+<span class="hljs-variable">$TempZip</span> = <span class="hljs-built_in">Join-Path</span> <span class="hljs-literal">-Path</span> <span class="hljs-variable">$TempRoot</span> <span class="hljs-literal">-ChildPath</span> <span class="hljs-string">'payload.zip'</span>
+
+<span class="hljs-keyword">try</span> {
+    <span class="hljs-built_in">Compress-Archive</span> <span class="hljs-literal">-Path</span> (<span class="hljs-built_in">Join-Path</span> <span class="hljs-literal">-Path</span> <span class="hljs-variable">$SourceDir</span> <span class="hljs-literal">-ChildPath</span> <span class="hljs-string">'*'</span>) <span class="hljs-literal">-DestinationPath</span> <span class="hljs-variable">$TempZip</span> <span class="hljs-literal">-Force</span>
+    <span class="hljs-variable">$Bytes</span> = [<span class="hljs-type">IO.File</span>]::ReadAllBytes(<span class="hljs-variable">$TempZip</span>)
+    <span class="hljs-variable">$Base64</span> = [<span class="hljs-type">Convert</span>]::ToBase64String(<span class="hljs-variable">$Bytes</span>)
+    <span class="hljs-variable">$Builder</span> = <span class="hljs-built_in">New-Object</span> System.Text.StringBuilder
+    <span class="hljs-keyword">for</span> (<span class="hljs-variable">$Offset</span> = <span class="hljs-number">0</span>; <span class="hljs-variable">$Offset</span> <span class="hljs-operator">-lt</span> <span class="hljs-variable">$Base64</span>.Length; <span class="hljs-variable">$Offset</span> += <span class="hljs-number">76</span>) {
+        <span class="hljs-variable">$ChunkLength</span> = [<span class="hljs-type">Math</span>]::Min(<span class="hljs-number">76</span>, <span class="hljs-variable">$Base64</span>.Length - <span class="hljs-variable">$Offset</span>)
+        [<span class="hljs-built_in">void</span>]<span class="hljs-variable">$Builder</span>.AppendLine(<span class="hljs-variable">$Base64</span>.Substring(<span class="hljs-variable">$Offset</span>,<span class="hljs-variable">$ChunkLength</span>))
+    }
+    <span class="hljs-variable">$WrappedBase64</span> = <span class="hljs-variable">$Builder</span>.ToString().TrimEnd()
+    <span class="hljs-built_in">Write-Verbose</span> (<span class="hljs-string">"Payload size: {0} bytes ({1} base64 characters)"</span> <span class="hljs-operator">-f</span> <span class="hljs-variable">$Bytes</span>.Length,<span class="hljs-variable">$Base64</span>.Length)
+
+    <span class="hljs-variable">$TemplateContent</span> = <span class="hljs-built_in">Get-Content</span> <span class="hljs-literal">-LiteralPath</span> <span class="hljs-variable">$TemplatePath</span> <span class="hljs-literal">-Raw</span>
+    <span class="hljs-variable">$Rendered</span> = <span class="hljs-variable">$TemplateContent</span> <span class="hljs-operator">-replace</span> <span class="hljs-string">'__PYSHIM_EMBEDDED_ARCHIVE__'</span>,<span class="hljs-variable">$WrappedBase64</span>
+    <span class="hljs-keyword">if</span> (<span class="hljs-variable">$Rendered</span> <span class="hljs-operator">-notlike</span> <span class="hljs-string">'*__PYSHIM_EMBEDDED_ARCHIVE__*'</span>) {
+        <span class="hljs-built_in">Write-Verbose</span> <span class="hljs-string">"Embedded archive inserted."</span>
+    } <span class="hljs-keyword">else</span> {
+        <span class="hljs-keyword">throw</span> <span class="hljs-string">'Failed to embed archive payload.'</span>
+    }
+
+    <span class="hljs-built_in">Set-Content</span> <span class="hljs-literal">-LiteralPath</span> <span class="hljs-variable">$OutputPath</span> <span class="hljs-literal">-Value</span> <span class="hljs-variable">$Rendered</span> <span class="hljs-literal">-Encoding</span> ASCII <span class="hljs-literal">-Force</span>
+    <span class="hljs-built_in">Write-Host</span> <span class="hljs-string">"Installer written to <span class="hljs-variable">$OutputPath</span>"</span> <span class="hljs-literal">-ForegroundColor</span> Green
+} <span class="hljs-keyword">finally</span> {
+    <span class="hljs-keyword">if</span> (<span class="hljs-built_in">Test-Path</span> <span class="hljs-literal">-LiteralPath</span> <span class="hljs-variable">$TempRoot</span>) {
+        <span class="hljs-built_in">Remove-Item</span> <span class="hljs-literal">-LiteralPath</span> <span class="hljs-variable">$TempRoot</span> <span class="hljs-literal">-Recurse</span> <span class="hljs-literal">-Force</span> <span class="hljs-literal">-ErrorAction</span> SilentlyContinue
+    }
 }
 </div></code></pre>
 <h2 id="binshimspipbat"><code>.\bin\shims\pip.bat</code></h2>
@@ -1772,11 +2245,11 @@ if /i &quot;%_parent%&quot;==&quot;%_here%&quot; goto :eof
 set &quot;_here=%_parent%&quot;
 goto :WALKUP
 </div></code></pre>
-<h2 id="binshimspythonenv"><code>.\bin\shims\python.env</code></h2>
-<pre class="hljs"><code><div>C:\Users\h8rt3rmin8r\miniconda3\envs\py312\python.exe
-</div></code></pre>
 <h2 id="examplespythonenv"><code>.\examples\python.env</code></h2>
 <pre class="hljs"><code><div>py:3.12
+</div></code></pre>
+<h2 id="binshimspythonenv"><code>.\bin\shims\python.env</code></h2>
+<pre class="hljs"><code><div>C:\Users\h8rt3rmin8r\miniconda3\envs\py312\python.exe
 </div></code></pre>
 <h2 id="examplespythonmyserviceenv"><code>.\examples\python@MyService.env</code></h2>
 <pre class="hljs"><code><div>conda:myservice
@@ -1814,7 +2287,7 @@ REM headless interpreter (best-effort)
         [<span class="hljs-type">Switch</span>]<span class="hljs-variable">$IsGetCommand</span>
     )
 
-    <span class="hljs-built_in">Write-Host</span> <span class="hljs-string">"  Running: <span class="hljs-variable">$Description</span>"</span> <span class="hljs-literal">-ForegroundColor</span> Cyan
+    <span class="hljs-built_in">Write-Host</span> <span class="hljs-string">"    Running: <span class="hljs-variable">$Description</span>"</span> <span class="hljs-literal">-ForegroundColor</span> Cyan
     <span class="hljs-variable">$CommandStart</span> = <span class="hljs-built_in">Get-Date</span>
     <span class="hljs-variable">$Job</span> = <span class="hljs-built_in">Start-Job</span> <span class="hljs-literal">-ScriptBlock</span> <span class="hljs-variable">$Command</span>
 
@@ -1823,7 +2296,7 @@ REM headless interpreter (best-effort)
     <span class="hljs-variable">$Duration</span> = (<span class="hljs-variable">$CommandEnd</span> - <span class="hljs-variable">$CommandStart</span>).TotalSeconds
 
     <span class="hljs-keyword">if</span> (<span class="hljs-variable">$null</span> <span class="hljs-operator">-eq</span> <span class="hljs-variable">$Completed</span>) {
-        <span class="hljs-built_in">Write-Host</span> <span class="hljs-string">"    TIMEOUT after <span class="hljs-variable">$Duration</span> seconds (max: <span class="hljs-variable">$TimeoutSeconds</span>)"</span> <span class="hljs-literal">-ForegroundColor</span> Red
+    <span class="hljs-built_in">Write-Host</span> <span class="hljs-string">"    TIMEOUT after <span class="hljs-variable">$Duration</span> seconds (max: <span class="hljs-variable">$TimeoutSeconds</span>)"</span> <span class="hljs-literal">-ForegroundColor</span> Red
         <span class="hljs-built_in">Stop-Job</span> <span class="hljs-literal">-Job</span> <span class="hljs-variable">$Job</span> <span class="hljs-literal">-ErrorAction</span> SilentlyContinue
         <span class="hljs-built_in">Remove-Job</span> <span class="hljs-literal">-Job</span> <span class="hljs-variable">$Job</span> <span class="hljs-literal">-Force</span> <span class="hljs-literal">-ErrorAction</span> SilentlyContinue
         <span class="hljs-variable">$script:TestsFailed</span> = <span class="hljs-variable">$true</span>
@@ -1839,21 +2312,21 @@ REM headless interpreter (best-effort)
     <span class="hljs-keyword">if</span> (<span class="hljs-variable">$JobState</span> <span class="hljs-operator">-eq</span> <span class="hljs-string">'Failed'</span> <span class="hljs-operator">-or</span> (<span class="hljs-variable">$JobError</span> <span class="hljs-operator">-and</span> <span class="hljs-variable">$JobError</span>.Count <span class="hljs-operator">-gt</span> <span class="hljs-number">0</span>)) {
         <span class="hljs-built_in">Write-Host</span> <span class="hljs-string">"    FAILED (duration: <span class="hljs-variable">$Duration</span> seconds)"</span> <span class="hljs-literal">-ForegroundColor</span> Red
         <span class="hljs-keyword">if</span> (<span class="hljs-variable">$JobError</span>) {
-            <span class="hljs-variable">$JobError</span> | <span class="hljs-built_in">ForEach-Object</span> { <span class="hljs-built_in">Write-Host</span> <span class="hljs-string">"      ERROR: <span class="hljs-variable">$_</span>"</span> <span class="hljs-literal">-ForegroundColor</span> Red }
+            <span class="hljs-variable">$JobError</span> | <span class="hljs-built_in">ForEach-Object</span> { <span class="hljs-built_in">Write-Host</span> <span class="hljs-string">"    ERROR: <span class="hljs-variable">$_</span>"</span> <span class="hljs-literal">-ForegroundColor</span> Red }
         }
         <span class="hljs-variable">$script:TestsFailed</span> = <span class="hljs-variable">$true</span>
         <span class="hljs-keyword">return</span> <span class="hljs-variable">$false</span>
     }
 
-    <span class="hljs-built_in">Write-Host</span> <span class="hljs-string">"    OK (duration: <span class="hljs-variable">$Duration</span> seconds)"</span> <span class="hljs-literal">-ForegroundColor</span> Green
+    <span class="hljs-built_in">Write-Host</span> <span class="hljs-string">"    Result: OK (duration: <span class="hljs-variable">$Duration</span> seconds)"</span> <span class="hljs-literal">-ForegroundColor</span> Green
     
     <span class="hljs-keyword">if</span> (<span class="hljs-variable">$JobOutput</span>) {
         <span class="hljs-keyword">if</span> (<span class="hljs-variable">$IsGetCommand</span>) {
             <span class="hljs-variable">$JsonOutput</span> = <span class="hljs-variable">$JobOutput</span> | <span class="hljs-built_in">Select-Object</span> CommandType, Name, Version, Source | <span class="hljs-built_in">ConvertTo-Json</span> <span class="hljs-literal">-Compress</span>
-            <span class="hljs-built_in">Write-Host</span> <span class="hljs-string">"      <span class="hljs-variable">$JsonOutput</span>"</span> <span class="hljs-literal">-ForegroundColor</span> Gray
+            <span class="hljs-built_in">Write-Host</span> <span class="hljs-string">"    Output: <span class="hljs-variable">$JsonOutput</span>"</span> <span class="hljs-literal">-ForegroundColor</span> Gray
         } <span class="hljs-keyword">else</span> {
             <span class="hljs-variable">$FlatOutput</span> = (<span class="hljs-variable">$JobOutput</span> | <span class="hljs-built_in">Out-String</span>).Trim() <span class="hljs-operator">-replace</span> <span class="hljs-string">"`r`n"</span>, <span class="hljs-string">", "</span> <span class="hljs-operator">-replace</span> <span class="hljs-string">"`n"</span>, <span class="hljs-string">", "</span>
-            <span class="hljs-built_in">Write-Host</span> <span class="hljs-string">"      <span class="hljs-variable">$FlatOutput</span>"</span> <span class="hljs-literal">-ForegroundColor</span> Gray
+            <span class="hljs-built_in">Write-Host</span> <span class="hljs-string">"    Output: <span class="hljs-variable">$FlatOutput</span>"</span> <span class="hljs-literal">-ForegroundColor</span> Gray
         }
     }
     <span class="hljs-keyword">return</span> <span class="hljs-variable">$true</span>
@@ -1922,7 +2395,7 @@ REM headless interpreter (best-effort)
 <span class="hljs-built_in">Write-Host</span> <span class="hljs-string">"Running a simple Python command using the pyshim function Run-WithPython:"</span> <span class="hljs-literal">-ForegroundColor</span> Yellow
 
 <span class="hljs-built_in">Invoke-TimedCommand</span> <span class="hljs-literal">-Description</span> <span class="hljs-string">"Run-WithPython -Spec 'py:3' -- -c `"print('ok')`""</span> <span class="hljs-literal">-Command</span> {
-    <span class="hljs-built_in">Import-Module</span> <span class="hljs-string">'C:\bin\shims\pyshim.psm1'</span> <span class="hljs-literal">-Force</span>
+    <span class="hljs-built_in">Import-Module</span> <span class="hljs-string">'C:\bin\shims\pyshim.psm1'</span> <span class="hljs-literal">-Force</span> <span class="hljs-literal">-DisableNameChecking</span>
     Run<span class="hljs-literal">-WithPython</span> <span class="hljs-literal">-Spec</span> <span class="hljs-string">'py:3'</span> -- <span class="hljs-literal">-c</span> <span class="hljs-string">"print('ok')"</span>
     <span class="hljs-variable">$LASTEXITCODE</span>
 } | <span class="hljs-built_in">Out-Null</span>
@@ -1965,7 +2438,7 @@ REM headless interpreter (best-effort)
         }
     } | <span class="hljs-built_in">Out-Null</span>
 } <span class="hljs-keyword">else</span> {
-    <span class="hljs-built_in">Write-Host</span> <span class="hljs-string">"  Skipped (UNC path not accessible)"</span> <span class="hljs-literal">-ForegroundColor</span> Gray
+    <span class="hljs-built_in">Write-Host</span> <span class="hljs-string">"    Skipped (UNC path not accessible)"</span> <span class="hljs-literal">-ForegroundColor</span> Gray
 }
 
 <span class="hljs-comment">#-------------------------------------------------------------------------------</span>

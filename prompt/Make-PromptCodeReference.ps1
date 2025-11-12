@@ -164,9 +164,14 @@ $SyntaxMap = @{
 Write-Host "Generating Prompt Code Reference from project root files..." -ForegroundColor Green
 Write-Host "  Target directory: $(Resolve-Path -LiteralPath $ProjectRoot)" -ForegroundColor Cyan
 
-# Delete existing output file if it exists to prevent it from being included in processing
-if (Test-Path -LiteralPath $OutputFile) {
-    Remove-Item -LiteralPath $OutputFile -Force -ErrorAction SilentlyContinue
+# Purge any existing prompt artifacts before generating new output
+$CleanupPattern = 'Prompt-Code-Reference*'
+$ExistingArtifacts = Get-ChildItem -LiteralPath $PSScriptRoot -Filter $CleanupPattern -File -ErrorAction SilentlyContinue
+if ($ExistingArtifacts) {
+    Write-Host "  Removing $($ExistingArtifacts.Count) existing prompt artifact(s)..." -ForegroundColor Yellow
+    foreach ($Artifact in $ExistingArtifacts) {
+        Remove-Item -LiteralPath $Artifact.FullName -Force -ErrorAction SilentlyContinue
+    }
 }
 
 # Get all files from project root (recursive if -Recurse specified)
