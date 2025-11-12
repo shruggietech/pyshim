@@ -76,6 +76,17 @@ When you call `python`, pyshim resolves the appropriate interpreter using this p
 
 ---
 
+## Releases & Single-File Installer
+
+- Run `pwsh ./tools/New-PyshimInstaller.ps1` to regenerate `dist/Install-Pyshim.ps1` with the current shims embedded.
+- Attach `dist/Install-Pyshim.ps1` to the GitHub release. End users can install by executing:
+
+   ```powershell
+   powershell.exe -ExecutionPolicy Bypass -File .\Install-Pyshim.ps1 -WritePath
+   ```
+
+- The installer mirrors `Make-Pyshim.ps1`: it copies the shims into `C:\bin\shims` and (optionally) appends that directory to the user PATH.
+
 ## Usage
 
 ### Global Interpreter
