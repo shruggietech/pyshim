@@ -1,14 +1,16 @@
 name: Build Installer
 
-concurrency: build-installer
-
-permissions:
-  contents: write
-
 on:
   workflow_dispatch:
   release:
     types: [published]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-installer
+  cancel-in-progress: true
 
 jobs:
   build:
