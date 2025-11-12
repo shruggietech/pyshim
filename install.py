@@ -62,24 +62,25 @@ def create_shim_directory():
 
 def install_shims(shim_dir):
     """Install shim executables to the shim directory."""
-    # For Python-based shims, we'll create batch files and scripts
+    # Get templates directory
+    templates_dir = Path(__file__).parent / "pyshim" / "templates"
     
-    # Create batch files for Windows
-    batch_template = """@echo off
-python -m pyshim.shim {command} %*
-"""
+    # Copy batch file templates to shim directory
+    shim_files = ["python.bat", "pip.bat", "py.bat"]
     
-    commands = {
-        "python.bat": "python",
-        "pip.bat": "pip",
-        "py.bat": "py",
-    }
-    
-    for filename, command in commands.items():
-        batch_file = shim_dir / filename
-        content = f'@echo off\npython -m pyshim.shim:{command} %*\n'
-        batch_file.write_text(content)
-        print(f"Created shim: {batch_file}")
+    for filename in shim_files:
+        template_file = templates_dir / filename
+        shim_file = shim_dir / filename
+        
+        if template_file.exists():
+            # Copy template to shim directory
+            shim_file.write_text(template_file.read_text())
+            print(f"Created shim: {shim_file}")
+        else:
+            # Fallback: create simple batch file
+            content = f'@echo off\npython -c "from pyshim.shim import main_{filename.replace(".bat", "")}; main_{filename.replace(".bat", "")}()" %*\n'
+            shim_file.write_text(content)
+            print(f"Created shim: {shim_file}")
 
 
 def setup_path_instructions(shim_dir):
