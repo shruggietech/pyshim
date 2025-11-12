@@ -1,0 +1,32 @@
+name: Build Installer
+
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Generate installer
+        run: ./tools/New-PyshimInstaller.ps1 -Force -OutputPath ./dist/Install-Pyshim.ps1
+
+      - name: Upload installer artifact
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Install-Pyshim.ps1
+          path: dist/Install-Pyshim.ps1
+
+      - name: Attach installer to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/Install-Pyshim.ps1

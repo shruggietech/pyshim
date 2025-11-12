@@ -86,6 +86,7 @@ When you call `python`, pyshim resolves the appropriate interpreter using this p
    ```
 
 - The installer mirrors `Make-Pyshim.ps1`: it copies the shims into `C:\bin\shims` and (optionally) appends that directory to the user PATH.
+- The `Build Installer` GitHub workflow (`.github/workflows/build-installer.yml`) can be triggered manually or by publishing a release. It runs the generator script and, when invoked from a release, uploads the installer as a release asset automatically.
 
 ## Usage
 
