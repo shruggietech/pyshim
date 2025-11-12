@@ -1,4 +1,9 @@
-concurrency: Build Installer
+name: Build Installer
+
+concurrency: build-installer
+
+permissions:
+  contents: write
 
 on:
   workflow_dispatch:
@@ -14,6 +19,9 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
+      - name: Ensure dist directory exists
+        run: New-Item -ItemType Directory -Path ./dist -Force | Out-Null
 
       - name: Generate installer
         run: ./tools/New-PyshimInstaller.ps1 -Force -OutputPath ./dist/Install-Pyshim.ps1
