@@ -25,7 +25,7 @@
 [CmdletBinding(SupportsShouldProcess=$true,ConfirmImpact='None',DefaultParameterSetName='Default')]
 Param(
     [Parameter(Mandatory=$false,ParameterSetName='Default')]
-    [Alias("WritePath","Path","P")]
+    [Alias("Path","P")]
     [Switch]$WritePath,
 
     [Parameter(Mandatory=$true,ParameterSetName='HelpText')]

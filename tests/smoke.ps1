@@ -24,7 +24,7 @@ function Invoke-TimedCommand {
         [Switch]$IsGetCommand
     )
 
-    Write-Host "  Running: $Description" -ForegroundColor Cyan
+    Write-Host "    Running: $Description" -ForegroundColor Cyan
     $CommandStart = Get-Date
     $Job = Start-Job -ScriptBlock $Command
 
@@ -33,7 +33,7 @@ function Invoke-TimedCommand {
     $Duration = ($CommandEnd - $CommandStart).TotalSeconds
 
     if ($null -eq $Completed) {
-        Write-Host "    TIMEOUT after $Duration seconds (max: $TimeoutSeconds)" -ForegroundColor Red
+    Write-Host "    TIMEOUT after $Duration seconds (max: $TimeoutSeconds)" -ForegroundColor Red
         Stop-Job -Job $Job -ErrorAction SilentlyContinue
         Remove-Job -Job $Job -Force -ErrorAction SilentlyContinue
         $script:TestsFailed = $true
@@ -49,21 +49,21 @@ function Invoke-TimedCommand {
     if ($JobState -eq 'Failed' -or ($JobError -and $JobError.Count -gt 0)) {
         Write-Host "    FAILED (duration: $Duration seconds)" -ForegroundColor Red
         if ($JobError) {
-            $JobError | ForEach-Object { Write-Host "      ERROR: $_" -ForegroundColor Red }
+            $JobError | ForEach-Object { Write-Host "    ERROR: $_" -ForegroundColor Red }
         }
         $script:TestsFailed = $true
         return $false
     }
 
-    Write-Host "    OK (duration: $Duration seconds)" -ForegroundColor Green
+    Write-Host "    Result: OK (duration: $Duration seconds)" -ForegroundColor Green
     
     if ($JobOutput) {
         if ($IsGetCommand) {
             $JsonOutput = $JobOutput | Select-Object CommandType, Name, Version, Source | ConvertTo-Json -Compress
-            Write-Host "      $JsonOutput" -ForegroundColor Gray
+            Write-Host "    Output: $JsonOutput" -ForegroundColor Gray
         } else {
             $FlatOutput = ($JobOutput | Out-String).Trim() -replace "`r`n", ", " -replace "`n", ", "
-            Write-Host "      $FlatOutput" -ForegroundColor Gray
+            Write-Host "    Output: $FlatOutput" -ForegroundColor Gray
         }
     }
     return $true
@@ -132,7 +132,7 @@ $SepLine | Write-Host
 Write-Host "Running a simple Python command using the pyshim function Run-WithPython:" -ForegroundColor Yellow
 
 Invoke-TimedCommand -Description "Run-WithPython -Spec 'py:3' -- -c `"print('ok')`"" -Command {
-    Import-Module 'C:\bin\shims\pyshim.psm1' -Force
+    Import-Module 'C:\bin\shims\pyshim.psm1' -Force -DisableNameChecking
     Run-WithPython -Spec 'py:3' -- -c "print('ok')"
     $LASTEXITCODE
 } | Out-Null
@@ -175,7 +175,7 @@ if (Test-Path -LiteralPath $UncPath -ErrorAction SilentlyContinue) {
         }
     } | Out-Null
 } else {
-    Write-Host "  Skipped (UNC path not accessible)" -ForegroundColor Gray
+    Write-Host "    Skipped (UNC path not accessible)" -ForegroundColor Gray
 }
 
 #-------------------------------------------------------------------------------
