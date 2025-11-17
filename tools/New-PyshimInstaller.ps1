@@ -19,7 +19,7 @@
 
     Generates the installer at the repository root, overwriting any existing file.
 #>
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess=$true,ConfirmImpact='None',DefaultParameterSetName='Default')]
 Param(
     [Parameter(Mandatory=$false)]
     [System.String]$OutputPath,
@@ -60,10 +60,30 @@ if ((Test-Path -LiteralPath $OutputPath) -and (-not $Force)) {
 }
 
 $TempRoot = New-Item -ItemType Directory -Path (Join-Path ([IO.Path]::GetTempPath()) ("pyshim_dist_" + [Guid]::NewGuid().ToString('N'))) -Force
+$StagingDir = Join-Path -Path $TempRoot -ChildPath 'shims'
 $TempZip = Join-Path -Path $TempRoot -ChildPath 'payload.zip'
+$ExcludedExact = @('python.env','python.nopersist')
+$ExcludedWildcard = @('python@*.env')
 
 try {
-    Compress-Archive -Path (Join-Path -Path $SourceDir -ChildPath '*') -DestinationPath $TempZip -Force
+    New-Item -ItemType Directory -Path $StagingDir -Force | Out-Null
+    Copy-Item -Path (Join-Path -Path $SourceDir -ChildPath '*') -Destination $StagingDir -Recurse -Force
+
+    Get-ChildItem -Path $StagingDir -Recurse -File | ForEach-Object {
+        $Name = $_.Name
+        if ($ExcludedExact -contains $Name) {
+            Remove-Item -LiteralPath $_.FullName -Force
+        } else {
+            foreach ($Pattern in $ExcludedWildcard) {
+                if ($Name -like $Pattern) {
+                    Remove-Item -LiteralPath $_.FullName -Force
+                    break
+                }
+            }
+        }
+    }
+
+    Compress-Archive -Path (Join-Path -Path $StagingDir -ChildPath '*') -DestinationPath $TempZip -Force
     $Bytes = [IO.File]::ReadAllBytes($TempZip)
     $Base64 = [Convert]::ToBase64String($Bytes)
     $Builder = New-Object System.Text.StringBuilder

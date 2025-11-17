@@ -24,3 +24,8 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+
+# pyshim runtime state files
+bin/shims/python.env
+bin/shims/python.nopersist
+bin/shims/python@*.env
