@@ -164,7 +164,15 @@ function Enable-PyshimProfile {
         return
     }
 
-    $Targets = $Targets | Sort-Object -Property Path, Origin -Unique
+    $ScopeOrder = @('AllUsersAllHosts','AllUsersCurrentHost','CurrentUserAllHosts','CurrentUserCurrentHost')
+
+    $Targets = $Targets |
+        Sort-Object -Property Path, Origin -Unique |
+        Sort-Object -Property @{Expression = { [Array]::IndexOf($ScopeOrder,$_.Scope) } },
+                                   @{Expression = { $_.Origin } },
+                                   @{Expression = { $_.Path } }
+
+    $AppliedScopesByOrigin = @{}
 
     $SentinelStart = '# >>> pyshim auto-import >>>'
     $SentinelEnd   = '# <<< pyshim auto-import <<<'
@@ -173,7 +181,7 @@ function Enable-PyshimProfile {
         $SentinelStart
         "if (Test-Path '$ShimModulePath') {"
         '    try {'
-        "        Import-Module '$ShimModulePath' -ErrorAction Stop"
+        "        Import-Module '$ShimModulePath' -ErrorAction Stop -WarningAction SilentlyContinue"
         '    } catch {'
         '        Write-Verbose "pyshim auto-import failed: $($_.Exception.Message)"'
         '    }'
@@ -208,6 +216,21 @@ function Enable-PyshimProfile {
         $NeedsElevation = ($ScopeName -like 'AllUsers*') -or ($ProfilePath -like "$env:ProgramFiles*") -or ($ProfilePath -like "$env:WINDIR*")
         if ($NeedsElevation -and -not $IsElevated) {
             Write-Warning "Skipping $Origin $ScopeName profile at $ProfilePath (administrator rights required)."
+            continue
+        }
+
+        $AppliedForOrigin = if ($AppliedScopesByOrigin.ContainsKey($Origin)) { $AppliedScopesByOrigin[$Origin] } else { @() }
+        $SkipForRedundancy = $false
+        $CurrentIndex = [Array]::IndexOf($ScopeOrder,$ScopeName)
+        foreach ($AppliedScope in $AppliedForOrigin) {
+            $AppliedIndex = [Array]::IndexOf($ScopeOrder,$AppliedScope)
+            if ($AppliedIndex -ge 0 -and $CurrentIndex -ge 0 -and $AppliedIndex -le $CurrentIndex) {
+                $SkipForRedundancy = $true
+                break
+            }
+        }
+        if ($SkipForRedundancy) {
+            Write-Verbose "Skipping $Origin $ScopeName because a broader pyshim profile block already exists."
             continue
         }
 
@@ -257,6 +280,224 @@ function Enable-PyshimProfile {
         if ($PSCmdlet.ShouldProcess($ProfilePath,"Insert pyshim auto-import block for $Origin $ScopeName")) {
             Add-Content -LiteralPath $ProfilePath -Value $AppendValue -Encoding utf8
             Write-Host "Added pyshim auto-import to $ProfilePath ($Origin / $ScopeName)." -ForegroundColor Green
+            if (-not $AppliedScopesByOrigin.ContainsKey($Origin)) {
+                $AppliedScopesByOrigin[$Origin] = @()
+            }
+            $AppliedScopesByOrigin[$Origin] = $AppliedScopesByOrigin[$Origin] + $ScopeName
+        }
+    }
+
+    if ($AppliedScopesByOrigin.Count -gt 0) {
+        $ScopesToPrune = [System.Collections.Generic.HashSet[string]]::new()
+        foreach ($OriginEntry in $AppliedScopesByOrigin.GetEnumerator()) {
+            foreach ($ScopeRecorded in $OriginEntry.Value) {
+                $RecordedIndex = [Array]::IndexOf($ScopeOrder,$ScopeRecorded)
+                if ($RecordedIndex -ge 0 -and $RecordedIndex -lt ($ScopeOrder.Count - 1)) {
+                    for ($k = $RecordedIndex + 1; $k -lt $ScopeOrder.Count; $k++) {
+                        [void]$ScopesToPrune.Add($ScopeOrder[$k])
+                    }
+                }
+            }
+        }
+
+        if ($ScopesToPrune.Count -gt 0) {
+            $ScopesArray = $ScopesToPrune.ToArray()
+            Disable-PyshimProfile -Scope $ScopesArray -IncludeWindowsPowerShell:$IncludeWindowsPowerShell -NoBackup:$NoBackup -Confirm:$false | Out-Null
+        }
+    }
+}
+
+function Disable-PyshimProfile {
+    <#
+    .SYNOPSIS
+        Remove the pyshim auto-import block from PowerShell profile files.
+    .DESCRIPTION
+        Mirrors Enable-PyshimProfile by locating the sentinel block in each targeted profile and
+        deleting it. Honors the same scope selection, optional Windows PowerShell targeting, and
+        backup behavior so an enable/disable cycle is reversible across the same paths.
+    .PARAMETER Scope
+        One or more profile scopes to update. Defaults to CurrentUserAllHosts and CurrentUserCurrentHost.
+        Valid values: CurrentUserCurrentHost, CurrentUserAllHosts, AllUsersCurrentHost, AllUsersAllHosts.
+    .PARAMETER IncludeWindowsPowerShell
+        Also remove the block from the equivalent Windows PowerShell 5.x profiles under WindowsPowerShell directories.
+    .PARAMETER NoBackup
+        Skip creating a .pyshim.bak backup before editing existing profile files.
+    .EXAMPLE
+        Disable-PyshimProfile
+    .EXAMPLE
+        Disable-PyshimProfile -Scope AllUsersAllHosts -IncludeWindowsPowerShell
+    #>
+    [CmdletBinding(SupportsShouldProcess=$true)]
+    Param(
+        [Parameter(Mandatory=$false)]
+        [ValidateSet('CurrentUserCurrentHost','CurrentUserAllHosts','AllUsersCurrentHost','AllUsersAllHosts')]
+        [string[]]$Scope = @('CurrentUserAllHosts','CurrentUserCurrentHost'),
+
+        [Switch]$IncludeWindowsPowerShell,
+
+        [Switch]$NoBackup
+    )
+
+    $ProfileMap = [ordered]@{
+        CurrentUserCurrentHost = $PROFILE.CurrentUserCurrentHost
+        CurrentUserAllHosts    = $PROFILE.CurrentUserAllHosts
+        AllUsersCurrentHost    = $PROFILE.AllUsersCurrentHost
+        AllUsersAllHosts       = $PROFILE.AllUsersAllHosts
+    }
+
+    $Targets = @()
+    foreach ($Requested in $Scope) {
+        if (-not $ProfileMap.Contains($Requested)) { continue }
+        $Path = $ProfileMap[$Requested]
+        if ([string]::IsNullOrWhiteSpace($Path)) { continue }
+        $Targets += [pscustomobject]@{
+            Scope  = $Requested
+            Path   = $Path
+            Origin = 'pwsh'
+        }
+    }
+
+    if ($IncludeWindowsPowerShell) {
+        $UserDocuments = [Environment]::GetFolderPath('MyDocuments')
+        $WinPsUserRoot = Join-Path $UserDocuments 'WindowsPowerShell'
+        $WinPsAllUsersRoot = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0'
+
+        $LegacyMap = [ordered]@{
+            CurrentUserCurrentHost = Join-Path $WinPsUserRoot 'Microsoft.PowerShell_profile.ps1'
+            CurrentUserAllHosts    = Join-Path $WinPsUserRoot 'profile.ps1'
+            AllUsersCurrentHost    = Join-Path $WinPsAllUsersRoot 'Microsoft.PowerShell_profile.ps1'
+            AllUsersAllHosts       = Join-Path $WinPsAllUsersRoot 'profile.ps1'
+        }
+
+        foreach ($Requested in $Scope) {
+            if (-not $LegacyMap.Contains($Requested)) { continue }
+            $Path = $LegacyMap[$Requested]
+            if ([string]::IsNullOrWhiteSpace($Path)) { continue }
+            $Targets += [pscustomobject]@{
+                Scope  = $Requested
+                Path   = $Path
+                Origin = 'WindowsPowerShell'
+            }
+        }
+    }
+
+    if (-not $Targets) {
+        Write-Warning 'No valid profile paths resolved for the requested scope(s).'
+        return
+    }
+
+    $Targets = $Targets | Sort-Object -Property Path, Origin -Unique
+
+    $SentinelStart = '# >>> pyshim auto-import >>>'
+    $SentinelEnd   = '# <<< pyshim auto-import <<<'
+
+    $IsElevated = $false
+    try {
+        $Identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+        $Principal = [Security.Principal.WindowsPrincipal]::new($Identity)
+        $IsElevated = $Principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    } catch {
+        Write-Verbose 'Unable to determine elevation status for profile updates.'
+    }
+
+    foreach ($Target in $Targets) {
+        $ProfilePath = $Target.Path
+        $ScopeName = $Target.Scope
+        $Origin = $Target.Origin
+
+        if ([string]::IsNullOrWhiteSpace($ProfilePath)) {
+            continue
+        }
+
+        $Directory = Split-Path -Parent $ProfilePath
+        if (-not $Directory) {
+            continue
+        }
+
+        $NeedsElevation = ($ScopeName -like 'AllUsers*') -or ($ProfilePath -like "$env:ProgramFiles*") -or ($ProfilePath -like "$env:WINDIR*")
+        if ($NeedsElevation -and -not $IsElevated) {
+            Write-Warning "Skipping $Origin $ScopeName profile at $ProfilePath (administrator rights required)."
+            continue
+        }
+
+        if (-not (Test-Path -LiteralPath $ProfilePath)) {
+            Write-Verbose "Profile file $ProfilePath does not exist; nothing to remove."
+            continue
+        }
+
+        $ExistingContent = Get-Content -LiteralPath $ProfilePath -Raw
+        if ($ExistingContent -eq $null) {
+            continue
+        }
+
+        $Lines = $ExistingContent -split "`r?`n"
+        $StartIndex = -1
+        for ($i = 0; $i -lt $Lines.Count; $i++) {
+            if ($Lines[$i] -eq $SentinelStart) {
+                $StartIndex = $i
+                break
+            }
+        }
+
+        if ($StartIndex -lt 0) {
+            Write-Verbose "No pyshim auto-import block found in $ProfilePath."
+            continue
+        }
+
+        $EndIndex = -1
+        for ($j = $StartIndex; $j -lt $Lines.Count; $j++) {
+            if ($Lines[$j] -eq $SentinelEnd) {
+                $EndIndex = $j
+                break
+            }
+        }
+
+        if ($EndIndex -lt 0) {
+            Write-Verbose "Found start sentinel without matching end in $ProfilePath; skipping removal."
+            continue
+        }
+
+        $RangeStart = $StartIndex
+        if ($RangeStart -gt 0 -and [string]::IsNullOrWhiteSpace($Lines[$RangeStart - 1])) {
+            $RangeStart -= 1
+        }
+
+        $RangeEnd = $EndIndex
+        $Before = if ($RangeStart -gt 0) { $Lines[0..($RangeStart - 1)] } else { @() }
+        $After = @()
+        if ($RangeEnd -lt ($Lines.Count - 1)) {
+            $After = $Lines[($RangeEnd + 1)..($Lines.Count - 1)]
+        }
+
+        while ($Before.Count -gt 0 -and [string]::IsNullOrWhiteSpace($Before[-1])) {
+            $Before = if ($Before.Count -gt 1) { $Before[0..($Before.Count - 2)] } else { @() }
+        }
+
+        while ($After.Count -gt 0 -and [string]::IsNullOrWhiteSpace($After[0])) {
+            $After = if ($After.Count -gt 1) { $After[1..($After.Count - 1)] } else { @() }
+        }
+
+        $NewLines = @()
+        if ($Before) { $NewLines += $Before }
+        if ($After) { $NewLines += $After }
+
+        $NewContent = $null
+        if ($NewLines.Count -gt 0) {
+            $NewContent = $NewLines -join "`r`n"
+        } else {
+            $NewContent = ''
+        }
+
+        if (-not $NoBackup) {
+            $BackupPath = "$ProfilePath.pyshim.bak"
+            if (-not (Test-Path -LiteralPath $BackupPath)) {
+                Copy-Item -LiteralPath $ProfilePath -Destination $BackupPath -Force
+            }
+        }
+
+        if ($PSCmdlet.ShouldProcess($ProfilePath,"Remove pyshim auto-import block for $Origin $ScopeName")) {
+            Set-Content -LiteralPath $ProfilePath -Value $NewContent -Encoding utf8
+            Write-Host "Removed pyshim auto-import from $ProfilePath ($Origin / $ScopeName)." -ForegroundColor Green
         }
     }
 }
@@ -399,7 +640,7 @@ function Update-Pyshim {
 
         $ModulePath = Join-Path $ShimDir 'pyshim.psm1'
         if (Test-Path -LiteralPath $ModulePath) {
-            Import-Module $ModulePath -Force -ErrorAction SilentlyContinue
+            Import-Module $ModulePath -Force -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
         }
 
         Write-Host "pyshim updated to release $TargetTag." -ForegroundColor Green
