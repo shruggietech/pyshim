@@ -51,6 +51,7 @@ When you call `python`, pyshim resolves the appropriate interpreter using this p
 
 ## Prerequisites
 
+- Install the **Windows Python Launcher (`py.exe`)** unless you already have it. Run any modern Python installer from [python.org](https://www.python.org/downloads/) and tick **"Install launcher for all users"** during setup. pyshim’s fallback chain expects `py.exe` (or Conda) to be present.
 - Install **PowerShell 7 (pwsh)**. On Windows 11, run:
 
    ```powershell
@@ -68,15 +69,11 @@ When you call `python`, pyshim resolves the appropriate interpreter using this p
 
 ## Install (Recommended)
 
-1. **Install the Windows Python Launcher** (if you do not already have `py.exe`):
-   - Download any modern Python from [python.org](https://www.python.org/downloads/).
-   - During setup, tick **"Install launcher for all users (recommended)"**.
-
-2. **Download the latest release** from [github.com/shruggietech/pyshim/releases](https://github.com/shruggietech/pyshim/releases):
+1. **Download the installer** from [the latest releases](https://github.com/shruggietech/pyshim/releases/latest):
    - Grab `Install-Pyshim.ps1` (required).
-   - (Optional) Grab `Install-CondaPythons.ps1` if you want prebuilt Conda envs `py310`–`py314`.
+   - Optionally grab `Install-CondaPythons.ps1` if you want prebuilt Conda envs `py310`–`py314`.
 
-3. **Run the installer** in an elevated PowerShell window (writes to `C:\bin\shims`):
+2. **Run the installer** in an elevated PowerShell window (writes to `C:\bin\shims`):
 
    ```powershell
    powershell.exe -ExecutionPolicy Bypass -File .\Install-Pyshim.ps1 -WritePath
@@ -84,7 +81,7 @@ When you call `python`, pyshim resolves the appropriate interpreter using this p
 
    The script copies the shims to `C:\bin\shims` and adds that directory to your user PATH when it is missing. Skip `-WritePath` if you prefer to be prompted.
 
-4. **(Optional) Provision Conda environments** after the main installer finishes:
+3. **(Optional) Provision Conda environments** after the main installer finishes:
 
    ```powershell
    powershell.exe -ExecutionPolicy Bypass -File .\Install-CondaPythons.ps1
@@ -92,7 +89,7 @@ When you call `python`, pyshim resolves the appropriate interpreter using this p
 
    Supply `-ForceRecreate` to rebuild existing envs or `-CondaPath` if `conda.exe` lives elsewhere.
 
-5. **Auto-load the module in PowerShell** so every shell gets the shim helpers:
+4. **Auto-load the module in PowerShell** so every shell gets the shim helpers:
 
    ```powershell
    Import-Module 'C:\bin\shims\pyshim.psm1'
@@ -103,7 +100,7 @@ When you call `python`, pyshim resolves the appropriate interpreter using this p
 
 ### Manual install (advanced)
 
-You can still do things the hard way if you want complete manual control:
+If you prefer to copy files yourself, follow these steps instead of the installer:
 
 1. Create `C:\bin\shims` yourself.
 2. Copy `python.bat`, `pip.bat`, `pythonw.bat`, `pyshim.psm1`, and `Uninstall-Pyshim.ps1` into that folder.
