@@ -49,45 +49,70 @@ When you call `python`, pyshim resolves the appropriate interpreter using this p
 
 ---
 
-## Installation
+## Install (Recommended)
 
-1. **Install the Windows Python Launcher** (if not already installed):
-   - Download and install any Python version from [python.org](https://www.python.org/downloads/)
-   - Check **"Install launcher for all users (recommended)"** during installation
-   - This installs `py.exe` to `C:\Windows\` (required for fallback chain)
+1. **Install the Windows Python Launcher** (if you do not already have `py.exe`):
+   - Download any modern Python from [python.org](https://www.python.org/downloads/).
+   - During setup, tick **"Install launcher for all users (recommended)"**.
 
-2. Create a directory for your shims (recommended: `C:\bin\shims`).
+2. **Download the latest release** from [github.com/shruggietech/pyshim/releases](https://github.com/shruggietech/pyshim/releases):
+   - Grab `Install-Pyshim.ps1` (required).
+   - (Optional) Grab `Install-CondaPythons.ps1` if you want prebuilt Conda envs `py310`–`py314`.
 
-3. Copy these files from the repository:
-   - `python.bat`
-   - `pip.bat`
-   - `pythonw.bat`
-   - `pyshim.psm1`
-
-4. Add `C:\bin\shims` to your **PATH** and move it to the top of the PATH order.
-
-5. Import the PowerShell module from your profile:
-
-   ```powershell
-   Import-Module 'C:\bin\shims\pyshim.psm1'
-   ```
-
-6. Restart PowerShell.
-
----
-
-## Releases & Single-File Installer
-
-- Run `pwsh ./tools/New-PyshimInstaller.ps1` to regenerate `dist/Install-Pyshim.ps1` with the current shims embedded.
-- Attach `dist/Install-Pyshim.ps1` to the GitHub release. End users can install by executing:
+3. **Run the installer** in an elevated PowerShell window (writes to `C:\bin\shims`):
 
    ```powershell
    powershell.exe -ExecutionPolicy Bypass -File .\Install-Pyshim.ps1 -WritePath
    ```
 
-- The installer mirrors `Make-Pyshim.ps1`: it copies the shims into `C:\bin\shims` and (optionally) appends that directory to the user PATH.
-- The `Build Installer` GitHub workflow (`.github/workflows/build-installer.yml`) can be triggered manually or by publishing a release. It runs the generator script and, when invoked from a release, uploads the installer as a release asset automatically.
-- Optional add-on: the same workflow copies `tools/Install-CondaPythons.ps1` to the release assets. Running `powershell.exe -ExecutionPolicy Bypass -File .\Install-CondaPythons.ps1` provisions Miniconda environments (`py310`…`py314`) so pyshim has prebuilt interpreters spanning Python 3.10–3.14. Supply `-CondaPath` if your `conda.exe` lives outside `%USERPROFILE%\miniconda3\Scripts`.
+   The script copies the shims to `C:\bin\shims` and adds that directory to your user PATH when it is missing. Skip `-WritePath` if you prefer to be prompted.
+
+4. **(Optional) Provision Conda environments** after the main installer finishes:
+
+   ```powershell
+   powershell.exe -ExecutionPolicy Bypass -File .\Install-CondaPythons.ps1
+   ```
+
+   Supply `-ForceRecreate` to rebuild existing envs or `-CondaPath` if `conda.exe` lives elsewhere.
+
+5. **Load the module in PowerShell** (add this to your profile for persistence):
+
+   ```powershell
+   Import-Module 'C:\bin\shims\pyshim.psm1'
+   ```
+
+   Restart any open terminals afterward so they pick up the PATH change.
+
+### Manual install (advanced)
+
+You can still do things the hard way if you want complete manual control:
+
+1. Create `C:\bin\shims` yourself.
+2. Copy `python.bat`, `pip.bat`, `pythonw.bat`, `pyshim.psm1`, and `Uninstall-Pyshim.ps1` into that folder.
+3. Put `C:\bin\shims` at the front of your user PATH.
+4. Import the module from your PowerShell profile.
+
+The single-file installer automates all of these steps, so prefer it for real machines.
+
+---
+
+## Uninstall
+
+The installer drops `C:\bin\shims\Uninstall-Pyshim.ps1`. Run it from an elevated PowerShell prompt when you want to undo everything:
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File C:\bin\shims\Uninstall-Pyshim.ps1
+```
+
+The uninstaller:
+
+1. Verifies the shim directory only contains pyshim files (pass `-Force` to override).
+2. Removes `C:\bin\shims` from your user PATH.
+3. Deletes the shim directory (including any persisted specs like `python.env`).
+
+If you added `Import-Module 'C:\bin\shims\pyshim.psm1'` to your PowerShell profile, remove that line manually. After the script runs, restart your shells to pick up the cleaned PATH.
+
+---
 
 ## Usage
 
@@ -233,9 +258,10 @@ C:\
         ├── pip.bat
         ├── pythonw.bat
         ├── pyshim.psm1
-        ├── python.env
-        ├── python@MyService.env
-        └── python.nopersist
+      ├── Uninstall-Pyshim.ps1
+      ├── python.env
+      ├── python@MyService.env
+      └── python.nopersist
 ```
 
 ---
@@ -246,6 +272,7 @@ C:\
 - `.python-version` — project-local interpreter spec.
 - `python@AppName.env` — per-application interpreter spec.
 - `python.nopersist` — disables persistence globally.
+- `Uninstall-Pyshim.ps1` — local uninstaller dropped by the installer.
 
 ---
 
@@ -284,6 +311,16 @@ python -m indexer.main
 ```powershell
 Run-WithPython -Spec 'py:3.9' -- -c "import sys; print(sys.version)"
 ```
+
+---
+
+## Maintainers: Building the Installer
+
+- Run `pwsh ./tools/New-PyshimInstaller.ps1` whenever the shims change. This regenerates `dist/Install-Pyshim.ps1` with the latest batch files, module, and the bundled `Uninstall-Pyshim.ps1`.
+- Publish `dist/Install-Pyshim.ps1` (and optionally `tools/Install-CondaPythons.ps1`) as release assets so end users can install without cloning the repo.
+- The GitHub workflow `.github/workflows/build-installer.yml` does this automatically when triggered manually or when a release is published. The artifact named `pyshim-tools` includes both scripts.
+
+Keep contributor-only notes down here so users don’t confuse the installer generator with the installer itself.
 
 ---
 
