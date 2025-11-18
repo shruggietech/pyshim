@@ -51,44 +51,106 @@ When you call `python`, pyshim resolves the appropriate interpreter using this p
 
 ---
 
-### Installation
+### Prerequisites
 
-1. **Install the Windows Python Launcher** (if not already installed):
-   - Download and install any Python version from [python.org](https://www.python.org/downloads/)
-   - Check **"Install launcher for all users (recommended)"** during installation
-   - This installs `py.exe` to `C:\Windows\` (required for fallback chain)
-
-2. Create a directory for your shims (recommended: `C:\bin\shims`).
-
-3. Copy these files from the repository:
-   - `python.bat`
-   - `pip.bat`
-   - `pythonw.bat`
-   - `pyshim.psm1`
-
-4. Add `C:\bin\shims` to your **PATH** and move it to the top of the PATH order.
-
-5. Import the PowerShell module from your profile:
+- Install the **Windows Python Launcher (`py.exe`)** unless you already have it. Run any modern Python installer from [python.org](https://www.python.org/downloads/) and tick **"Install launcher for all users"** during setup. pyshim’s fallback chain expects `py.exe` (or Conda) to be present.
+- Install **PowerShell 7 (pwsh)**. On Windows 11, run:
 
    ```powershell
-   Import-Module 'C:\bin\shims\pyshim.psm1'
+   winget install --id Microsoft.PowerShell --source winget
    ```
 
-6. Restart PowerShell.
+   The Microsoft Store package or the MSI from GitHub works too—just make sure `pwsh.exe` ends up on your PATH. Windows PowerShell 5.x is not enough for pyshim’s module helpers.
+- (Recommended) Set an execution policy for your account so profile scripts can run:
 
----
+   ```powershell
+   Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+   ```
 
-### Releases & Single-File Installer
+   Execute that inside PowerShell 7; you can tighten it again once profiles are configured.
 
-- Run `pwsh ./tools/New-PyshimInstaller.ps1` to regenerate `dist/Install-Pyshim.ps1` with the current shims embedded.
-- Attach `dist/Install-Pyshim.ps1` to the GitHub release. End users can install by executing:
+### Install (Recommended)
+
+1. **Download the installer** from [the latest releases](https://github.com/shruggietech/pyshim/releases/latest):
+   - Grab `Install-Pyshim.ps1` (required).
+   - Optionally grab `Install-CondaPythons.ps1` if you want prebuilt Conda envs `py310`–`py314`.
+
+2. **Run the installer** in an elevated PowerShell window (writes to `C:\bin\shims`):
 
    ```powershell
    powershell.exe -ExecutionPolicy Bypass -File .\Install-Pyshim.ps1 -WritePath
    ```
 
-- The installer mirrors `Make-Pyshim.ps1`: it copies the shims into `C:\bin\shims` and (optionally) appends that directory to the user PATH.
-- The `Build Installer` GitHub workflow (`.github/workflows/build-installer.yml`) can be triggered manually or by publishing a release. It runs the generator script and, when invoked from a release, uploads the installer as a release asset automatically.
+   The script copies the shims to `C:\bin\shims` and adds that directory to your user PATH when it is missing. Skip `-WritePath` if you prefer to be prompted.
+
+3. **(Optional) Provision Conda environments** after the main installer finishes:
+
+   ```powershell
+   powershell.exe -ExecutionPolicy Bypass -File .\Install-CondaPythons.ps1
+   ```
+
+   Supply `-ForceRecreate` to rebuild existing envs or `-CondaPath` if `conda.exe` lives elsewhere.
+
+4. **Auto-load the module in PowerShell** so every shell gets the shim helpers:
+
+   ```powershell
+   Import-Module 'C:\bin\shims\pyshim.psm1'
+   Enable-PyshimProfile
+   ```
+
+   This appends a guarded import block to your current-user profiles without touching existing content. Add `-Scope AllUsersAllHosts` and run in an elevated pwsh if you want it system-wide. Restart open terminals afterward so they pick up the refreshed PATH.
+
+#### Manual install (advanced)
+
+If you prefer to copy files yourself, follow these steps instead of the installer:
+
+1. Create `C:\bin\shims` yourself.
+2. Copy `python.bat`, `pip.bat`, `pythonw.bat`, `pyshim.psm1`, and `Uninstall-Pyshim.ps1` into that folder.
+3. Put `C:\bin\shims` at the front of your user PATH.
+4. Import the module from your PowerShell profile (or run `Enable-PyshimProfile` after importing the module once).
+
+The single-file installer automates all of these steps, so prefer it for real machines.
+
+---
+
+### Uninstall
+
+The installer drops `C:\bin\shims\Uninstall-Pyshim.ps1`. Run it from an elevated PowerShell prompt when you want to undo everything:
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File C:\bin\shims\Uninstall-Pyshim.ps1
+```
+
+The uninstaller:
+
+1. Verifies the shim directory only contains pyshim files (pass `-Force` to override).
+2. Removes `C:\bin\shims` from your user PATH.
+3. Deletes the shim directory (including any persisted specs like `python.env`).
+
+If you added `Import-Module 'C:\bin\shims\pyshim.psm1'` to your PowerShell profile, remove that line manually. After the script runs, restart your shells to pick up the cleaned PATH.
+
+---
+
+### Update
+
+To pick up the newest release without hunting through GitHub, run the module helper:
+
+```powershell
+Update-Pyshim
+```
+
+By default it grabs the latest release asset and reruns `Install-Pyshim.ps1` for you. Add `-WritePath` if you also want to ensure `C:\bin\shims` stays on your PATH, or `-Tag 'v0.1.1-alpha'` to pin a specific release. Supply a `GITHUB_TOKEN` environment variable (or pass `-Token`) if your network sits behind aggressive rate limiting.
+
+---
+
+### Auto-load in PowerShell
+
+- Run `Enable-PyshimProfile` after importing the module to append a guarded auto-import block to your `CurrentUser` profiles. Re-run it anytime; the sentinel comments prevent duplicates.
+- Pass `-Scope AllUsersAllHosts` (and run elevated) to cover background agents or shared build accounts. Add `-IncludeWindowsPowerShell` if you still launch legacy `powershell.exe` shells that need the shim.
+- The cmdlet creates `.pyshim.bak` backups the first time it touches each profile unless you pass `-NoBackup`. Opening profiles with `-NoProfile` skips the block by definition.
+- The inserted code simply checks for `C:\bin\shims\pyshim.psm1` and imports it with `Write-Verbose` logging when anything goes sideways, so your existing profile customizations stay in control.
+
+---
 
 ### Usage
 
@@ -228,16 +290,16 @@ Run-WithPython -Spec 'py:3.11' -- -c "print('hello from 3.11')"
 
 ```text
 C:\
-└── bin\
-    └── shims\
-        ├── python.bat
-        ├── pip.bat
-        ├── pythonw.bat
-        ├── pyshim.psm1
-        ├── python.env
-        ├── python@MyService.env
-        └── python.nopersist
+\-- bin\
+   \-- shims\
+      |-- python.bat
+      |-- pip.bat
+      |-- pythonw.bat
+      |-- pyshim.psm1
+      \-- Uninstall-Pyshim.ps1
 ```
+
+The installer only drops the files above. Runtime metadata such as `python.env`, `python.nopersist`, or any `python@*.env` files show up later when you use the module; they aren't part of the shipped tree.
 
 ---
 
@@ -247,6 +309,7 @@ C:\
 - `.python-version` — project-local interpreter spec.
 - `python@AppName.env` — per-application interpreter spec.
 - `python.nopersist` — disables persistence globally.
+- `Uninstall-Pyshim.ps1` — local uninstaller dropped by the installer.
 
 ---
 
@@ -285,6 +348,16 @@ python -m indexer.main
 ```powershell
 Run-WithPython -Spec 'py:3.9' -- -c "import sys; print(sys.version)"
 ```
+
+---
+
+### Maintainers: Building the Installer
+
+- Run `pwsh ./tools/New-PyshimInstaller.ps1` whenever the shims change. This regenerates `dist/Install-Pyshim.ps1` with the latest batch files, module, and the bundled `Uninstall-Pyshim.ps1`.
+- Publish `dist/Install-Pyshim.ps1` (and optionally `tools/Install-CondaPythons.ps1`) as release assets so end users can install without cloning the repo.
+- The GitHub workflow `.github/workflows/build-installer.yml` does this automatically when triggered manually or when a release is published. The artifact named `pyshim-tools` includes both scripts.
+
+Keep contributor-only notes down here so users don’t confuse the installer generator with the installer itself.
 
 ---
 
@@ -347,6 +420,11 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+
+# pyshim runtime state files
+bin/shims/python.env
+bin/shims/python.nopersist
+bin/shims/python@*.env
 ```
 
 ## `.\examples\.python-version`
@@ -365,8 +443,12 @@ on:
   release:
     types: [published]
 
+concurrency: build-installer
+
 jobs:
   build:
+    permissions:
+      contents: write
     runs-on: windows-latest
     defaults:
       run:
@@ -375,21 +457,32 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Ensure dist directory exists
+        run: New-Item -ItemType Directory -Path ./dist -Force | Out-Null
+
       - name: Generate installer
         run: ./tools/New-PyshimInstaller.ps1 -Force -OutputPath ./dist/Install-Pyshim.ps1
+
+      - name: Copy optional conda setup script
+        run: |
+          Copy-Item ./tools/Install-CondaPythons.ps1 ./dist/Install-CondaPythons.ps1 -Force
 
       - name: Upload installer artifact
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
-          name: Install-Pyshim.ps1
-          path: dist/Install-Pyshim.ps1
+          name: pyshim-tools
+          path: |
+            dist/Install-Pyshim.ps1
+            dist/Install-CondaPythons.ps1
 
       - name: Attach installer to release
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v1
         with:
-          files: dist/Install-Pyshim.ps1
+          files: |
+            dist/Install-Pyshim.ps1
+            dist/Install-CondaPythons.ps1
 ```
 
 ## `.\.github\copilot-instructions.md`
@@ -426,6 +519,177 @@ jobs:
 ### When In Doubt
 - Prefer tool-specific helpers (PowerShell cmdlets, batch subroutines) over inventing new workflows, and document any new CLI entrypoint.
 - Ask for clarification if interpreter resolution, persistence flags, or path rules seem underspecified.
+
+## `.\tools\Install-CondaPythons.ps1`
+
+```powershell
+<#
+.SYNOPSIS
+    Provision optional Miniconda environments for pyshim covering Python 3.10 through 3.14.
+.DESCRIPTION
+    Locates a Miniconda/conda installation and creates (or refreshes) lightweight
+    environments named py310 … py314, each pinned to its matching CPython version.
+    Existing environments are skipped if they already report the requested version.
+    This script mirrors the development setup used while bootstrapping pyshim and
+    serves as an optional add-on for users who want readily available interpreters
+    spanning multiple minor versions.
+.PARAMETER CondaPath
+    Explicit path to conda.exe. By default the script attempts to locate conda via
+    CONDA_EXE, the current PATH, or the common %USERPROFILE%\miniconda3 location.
+.PARAMETER ForceRecreate
+    When supplied, existing py3xx environments are removed and recreated even if
+    they already match the target version.
+.PARAMETER Help
+    Display detailed help for this script.
+.EXAMPLE
+    .\Install-CondaPythons.ps1
+
+    Creates py310…py314 environments using the detected conda installation.
+.EXAMPLE
+    .\Install-CondaPythons.ps1 -CondaPath 'C:\Tools\miniconda3\Scripts\conda.exe'
+
+    Use a custom conda installation when auto-detection fails.
+.EXAMPLE
+    .\Install-CondaPythons.ps1 -ForceRecreate
+
+    Rebuild all py3xx environments from scratch.
+#>
+[CmdletBinding(SupportsShouldProcess=$true,ConfirmImpact='Medium',DefaultParameterSetName='Default')]
+Param(
+    [Parameter(Mandatory=$false,ParameterSetName='Default')]
+    [Alias('Conda','CondaExe')]
+    [System.String]$CondaPath,
+
+    [Parameter(Mandatory=$false,ParameterSetName='Default')]
+    [Switch]$ForceRecreate,
+
+    [Parameter(Mandatory=$true,ParameterSetName='HelpText')]
+    [Alias('h')]
+    [Switch]$Help
+)
+
+if ($Help -or ($PSCmdlet.ParameterSetName -eq 'HelpText')) {
+    Get-Help -Name $MyInvocation.MyCommand.Path -Full
+    exit 0
+}
+
+function Resolve-CondaExecutable {
+    Param(
+        [Parameter(Mandatory=$false)]
+        [System.String]$Candidate
+    )
+
+    $SearchOrder = @()
+    if ($Candidate) { $SearchOrder += $Candidate }
+    if ($env:CONDA_EXE) { $SearchOrder += $env:CONDA_EXE }
+
+    $PathHit = $null
+    try {
+        $PathHit = (Get-Command conda -ErrorAction Stop).Source
+    } catch {
+        $PathHit = $null
+    }
+    if ($PathHit) { $SearchOrder += $PathHit }
+
+    $DefaultUserInstall = Join-Path -Path $env:USERPROFILE -ChildPath 'miniconda3\Scripts\conda.exe'
+    $SearchOrder += $DefaultUserInstall
+
+    foreach ($PathCandidate in $SearchOrder) {
+        if ([string]::IsNullOrWhiteSpace($PathCandidate)) { continue }
+        $Expanded = Resolve-Path -LiteralPath $PathCandidate -ErrorAction SilentlyContinue
+        if ($Expanded) {
+            return $Expanded.ProviderPath
+        }
+    }
+
+    return $null
+}
+
+function Invoke-CondaCommand {
+    Param(
+        [Parameter(Mandatory=$true)]
+        [System.String]$CondaExe,
+
+        [Parameter(Mandatory=$true)]
+        [System.String[]]$Arguments
+    )
+
+    Write-Verbose "[conda] $($Arguments -join ' ')"
+    $Output = & $CondaExe @Arguments 2>&1
+    $ExitCode = $LASTEXITCODE
+    if ($ExitCode -ne 0) {
+        $Combined = ($Output | Out-String).Trim()
+        if (-not $Combined) { $Combined = "conda exited with code $ExitCode" }
+        throw $Combined
+    }
+
+    return ($Output | Out-String)
+}
+
+$ResolvedConda = Resolve-CondaExecutable -Candidate $CondaPath
+if (-not $ResolvedConda) {
+    throw "Unable to locate conda.exe. Install Miniconda and/or supply -CondaPath."
+}
+
+Write-Host "Using conda: $ResolvedConda" -ForegroundColor Cyan
+
+$TargetVersions = [ordered]@{
+    'py310' = '3.10'
+    'py311' = '3.11'
+    'py312' = '3.12'
+    'py313' = '3.13'
+    'py314' = '3.14'
+}
+
+$EnvListJson = Invoke-CondaCommand -CondaExe $ResolvedConda -Arguments @('env','list','--json')
+$EnvList = $EnvListJson | ConvertFrom-Json
+$ExistingEnvMap = @{}
+foreach ($EnvPath in $EnvList.envs) {
+    $Name = [IO.Path]::GetFileName($EnvPath)
+    if (-not [string]::IsNullOrWhiteSpace($Name)) {
+        $ExistingEnvMap[$Name.ToLower()] = $EnvPath
+    }
+}
+
+foreach ($Entry in $TargetVersions.GetEnumerator()) {
+    $EnvName = $Entry.Key
+    $Version = $Entry.Value
+    $Existing = $ExistingEnvMap[$EnvName.ToLower()]
+
+    $NeedsCreation = $true
+    if ($Existing -and -not $ForceRecreate) {
+        try {
+            $VersionProbe = Invoke-CondaCommand -CondaExe $ResolvedConda -Arguments @('run','-n',$EnvName,'python','-c','import sys; print(sys.version.split()[0])')
+            $ReportedVersion = $VersionProbe.Trim()
+            if ($ReportedVersion.StartsWith($Version)) {
+                Write-Host "Environment '$EnvName' already provides Python $ReportedVersion; skipping." -ForegroundColor Green
+                $NeedsCreation = $false
+            } else {
+                Write-Host "Environment '$EnvName' reports Python $ReportedVersion (expected $Version). Recreating." -ForegroundColor Yellow
+            }
+        } catch {
+            Write-Warning "Failed to probe Python version for '$EnvName'. Environment will be recreated."
+        }
+    }
+
+    if ($Existing -and ($ForceRecreate -or $NeedsCreation)) {
+        if ($PSCmdlet.ShouldProcess($EnvName,'Remove existing conda environment')) {
+            Invoke-CondaCommand -CondaExe $ResolvedConda -Arguments @('env','remove','-n',$EnvName,'-y') | Out-Null
+        }
+        $NeedsCreation = $true
+    }
+
+    if ($NeedsCreation) {
+        if ($PSCmdlet.ShouldProcess($EnvName,"Create Python $Version environment")) {
+            Invoke-CondaCommand -CondaExe $ResolvedConda -Arguments @('create','-n',$EnvName,"python=$Version",'--yes','--quiet','--no-default-packages') | Out-Null
+            $Verify = Invoke-CondaCommand -CondaExe $ResolvedConda -Arguments @('run','-n',$EnvName,'python','-V')
+            Write-Host "Created '$EnvName': $($Verify.Trim())" -ForegroundColor Cyan
+        }
+    }
+}
+
+Write-Host "Requested Python environments are ready." -ForegroundColor Green
+```
 
 ## `.\dist\Install-Pyshim.ps1`
 
@@ -471,67 +735,109 @@ if ($Help -or ($PSCmdlet.ParameterSetName -eq 'HelpText')) {
 $EmbeddedArchive = @'
 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
-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
-DAAAAAA=
+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
 '@
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -1396,7 +1702,7 @@ if ($ShouldWritePath) {
 
     Generates the installer at the repository root, overwriting any existing file.
 #>
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess=$true,ConfirmImpact='None',DefaultParameterSetName='Default')]
 Param(
     [Parameter(Mandatory=$false)]
     [System.String]$OutputPath,
@@ -1437,10 +1743,30 @@ if ((Test-Path -LiteralPath $OutputPath) -and (-not $Force)) {
 }
 
 $TempRoot = New-Item -ItemType Directory -Path (Join-Path ([IO.Path]::GetTempPath()) ("pyshim_dist_" + [Guid]::NewGuid().ToString('N'))) -Force
+$StagingDir = Join-Path -Path $TempRoot -ChildPath 'shims'
 $TempZip = Join-Path -Path $TempRoot -ChildPath 'payload.zip'
+$ExcludedExact = @('python.env','python.nopersist')
+$ExcludedWildcard = @('python@*.env')
 
 try {
-    Compress-Archive -Path (Join-Path -Path $SourceDir -ChildPath '*') -DestinationPath $TempZip -Force
+    New-Item -ItemType Directory -Path $StagingDir -Force | Out-Null
+    Copy-Item -Path (Join-Path -Path $SourceDir -ChildPath '*') -Destination $StagingDir -Recurse -Force
+
+    Get-ChildItem -Path $StagingDir -Recurse -File | ForEach-Object {
+        $Name = $_.Name
+        if ($ExcludedExact -contains $Name) {
+            Remove-Item -LiteralPath $_.FullName -Force
+        } else {
+            foreach ($Pattern in $ExcludedWildcard) {
+                if ($Name -like $Pattern) {
+                    Remove-Item -LiteralPath $_.FullName -Force
+                    break
+                }
+            }
+        }
+    }
+
+    Compress-Archive -Path (Join-Path -Path $StagingDir -ChildPath '*') -DestinationPath $TempZip -Force
     $Bytes = [IO.File]::ReadAllBytes($TempZip)
     $Base64 = [Convert]::ToBase64String($Bytes)
     $Builder = New-Object System.Text.StringBuilder
@@ -1475,123 +1801,6 @@ try {
 setlocal
 REM ensure pip matches whatever python.bat resolved
 "%~dp0python.bat" -m pip %*
-```
-
-## `.\examples\profile.ps1`
-
-```powershell
-# Quiet verbose unless you explicitly opt in later
-$VerbosePreference = 'SilentlyContinue'
-
-# ===== ShruggieTech Python Shim Profile =====
-# Ensures the shim is first on PATH and loads helper functions
-
-# --- 1) PATH: ensure C:\bin\shims is first and unique
-$ShimDir = 'C:\bin\shims'
-
-# Bridge for when Windows Launcher is missing
-if (-not (Get-Command py -ErrorAction SilentlyContinue)) {
-    Set-Alias py "$ShimDir\python.bat" -Scope Global
-}
-
-# Split PATH into parts, remove empties, sort and unique
-$pathParts = ($env:PATH -split ';') | Where-Object { $_ -and $_.Trim() -ne '' } | Sort-Object -Unique
-
-# Remove all occurrences of ShimDir
-$pathParts = $pathParts | Where-Object { $_ -ne $ShimDir }
-
-# Prepend ShimDir
-$env:PATH = ($ShimDir + ';' + ($pathParts -join ';'))
-
-# Optional: make sure pipx shims are reachable
-$PipxBin = Join-Path $env:USERPROFILE '.local\bin'
-if (-not ($env:PATH -split ';' | Where-Object { $_ -eq $PipxBin })) {
-    $env:PATH = "$PipxBin;$env:PATH"
-}
-
-# --- 2) Import pyshim module (provides Use-Python, Set-AppPython, etc.)
-$PyShimModule = Join-Path $ShimDir 'pyshim.psm1'
-if (Test-Path -LiteralPath $PyShimModule) {
-    Import-Module $PyShimModule -Force -DisableNameChecking
-} else {
-    Write-Warning "pyshim module not found at $PyShimModule. Install shims and module from repo."
-}
-
-# --- 3) DO NOT override the Windows 'py' launcher
-# If you previously had: New-Alias py python  => REMOVE IT.
-# The py launcher is used by specs like 'py:3.12' and must remain available.
-
-# --- 4) Friendly helpers ------------------------------------------------------
-
-function Show-PyShim {
-    Write-Host "PATH[0] = $ShimDir"
-    Write-Host "pyshim module loaded: " -NoNewline
-    if (Get-Module -Name (Split-Path $PyShimModule -Leaf) -ErrorAction SilentlyContinue) {
-        Write-Host "yes"
-    } else {
-        Write-Host "no"
-    }
-
-    $globalEnv = Join-Path $ShimDir 'python.env'
-    $nopersist = Join-Path $ShimDir 'python.nopersist'
-    if (Test-Path $globalEnv) {
-        $spec = Get-Content -LiteralPath $globalEnv -Raw
-        Write-Host "Global spec (python.env): $spec"
-    } else {
-        Write-Host "Global spec (python.env): <none>"
-    }
-    Write-Host "Global persistence disabled? " -NoNewline
-    Write-Host ($(Test-Path $nopersist))
-    if ($env:PYSHIM_INTERPRETER) { Write-Host "Session spec: $($env:PYSHIM_INTERPRETER)" }
-    if ($env:PYSHIM_TARGET)      { Write-Host "App target : $($env:PYSHIM_TARGET)" }
-}
-
-# A quick bootstrap: if you want a default interpreter for new shells but not when nopersist is set
-$DefaultSpec = $null   # e.g. 'py:3.12' or 'conda:base'  (leave $null to do nothing)
-$NoPersistMarker = Join-Path $ShimDir 'python.nopersist'
-$GlobalEnvFile  = Join-Path $ShimDir 'python.env'
-
-if ($DefaultSpec -and -not (Test-Path $NoPersistMarker) -and -not (Test-Path $GlobalEnvFile)) {
-    try {
-        Use-Python -Spec $DefaultSpec -Persist
-        Write-Host "Initialized global Python spec -> $DefaultSpec"
-    } catch {
-        Write-Warning "Failed to initialize global Python spec: $($_.Exception.Message)"
-    }
-}
-
-# --- 5) Conda wrapper that cooperates with pyshim -----------------------------
-# When you run: conda activate <env>, set only the *session* spec to that env.
-# This keeps the shell consistent without flipping global persistence.
-function conda {
-    # Call the real conda
-    $RealConda = Join-Path $env:USERPROFILE 'miniconda3\Scripts\conda.exe'
-    if (-not (Test-Path -LiteralPath $RealConda)) {
-        Write-Error "Conda not found at $RealConda"; return
-    }
-    & $RealConda @Args
-
-    # Detect "conda activate <env>"
-    if ($Args.Count -ge 2 -and $Args[0] -eq 'activate') {
-        $envName = $Args[1]
-        # Session-only switch to that env
-        try {
-            Use-Python -Spec "conda:$envName"
-            Write-Host "Session Python -> conda:$envName (not persisted)"
-        } catch {
-            Write-Warning ("Failed to set session interpreter to conda:$($envName): $($_.Exception.Message)")
-        }
-    }
-}
-
-# --- 6) Convenience: quick commands ------------------------------------------
-Set-Alias which Get-Command -Scope Global -ErrorAction SilentlyContinue
-
-function pyver { & "$ShimDir\python.bat" -V }
-function pipver { & "$ShimDir\python.bat" -m pip --version }
-
-# Uncomment if you want to see current shim state on every new shell
-# Show-PyShim
 ```
 
 ## `.\pyshim.code-workspace`
@@ -1770,6 +1979,183 @@ function Enable-PythonPersistence {
     Write-Host "Removed nopersist marker. Global persistence active again."
 }
 
+function Enable-PyshimProfile {
+    <#
+    .SYNOPSIS
+        Append a guarded pyshim import block to PowerShell profile files.
+    .DESCRIPTION
+        Ensures the pyshim module auto-loads for selected profile scopes without clobbering existing
+        content. Creates profile files when missing, preserves backups, and inserts a sentinel block
+        only when it is not already present. Defaults to CurrentUserAllHosts and CurrentUserCurrentHost
+        for the active pwsh installation; optionally includes Windows PowerShell profiles.
+    .PARAMETER Scope
+        One or more profile scopes to update. Defaults to CurrentUserAllHosts and CurrentUserCurrentHost.
+        Valid values: CurrentUserCurrentHost, CurrentUserAllHosts, AllUsersCurrentHost, AllUsersAllHosts.
+    .PARAMETER IncludeWindowsPowerShell
+        Also update the equivalent Windows PowerShell 5.x profiles under WindowsPowerShell directories.
+    .PARAMETER NoBackup
+        Skip creating a .pyshim.bak backup alongside existing profile files.
+    .EXAMPLE
+        Enable-PyshimProfile
+    .EXAMPLE
+        Enable-PyshimProfile -Scope AllUsersAllHosts -IncludeWindowsPowerShell
+    #>
+    [CmdletBinding(SupportsShouldProcess=$true)]
+    Param(
+        [Parameter(Mandatory=$false)]
+        [ValidateSet('CurrentUserCurrentHost','CurrentUserAllHosts','AllUsersCurrentHost','AllUsersAllHosts')]
+        [string[]]$Scope = @('CurrentUserAllHosts','CurrentUserCurrentHost'),
+
+        [Switch]$IncludeWindowsPowerShell,
+
+        [Switch]$NoBackup
+    )
+
+    $ProfileMap = [ordered]@{
+        CurrentUserCurrentHost = $PROFILE.CurrentUserCurrentHost
+        CurrentUserAllHosts    = $PROFILE.CurrentUserAllHosts
+        AllUsersCurrentHost    = $PROFILE.AllUsersCurrentHost
+        AllUsersAllHosts       = $PROFILE.AllUsersAllHosts
+    }
+
+    $Targets = @()
+    foreach ($Requested in $Scope) {
+        if (-not $ProfileMap.Contains($Requested)) { continue }
+        $Path = $ProfileMap[$Requested]
+        if ([string]::IsNullOrWhiteSpace($Path)) { continue }
+        $Targets += [pscustomobject]@{
+            Scope  = $Requested
+            Path   = $Path
+            Origin = 'pwsh'
+        }
+    }
+
+    if ($IncludeWindowsPowerShell) {
+        $UserDocuments = [Environment]::GetFolderPath('MyDocuments')
+        $WinPsUserRoot = Join-Path $UserDocuments 'WindowsPowerShell'
+        $WinPsAllUsersRoot = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0'
+
+        $LegacyMap = [ordered]@{
+            CurrentUserCurrentHost = Join-Path $WinPsUserRoot 'Microsoft.PowerShell_profile.ps1'
+            CurrentUserAllHosts    = Join-Path $WinPsUserRoot 'profile.ps1'
+            AllUsersCurrentHost    = Join-Path $WinPsAllUsersRoot 'Microsoft.PowerShell_profile.ps1'
+            AllUsersAllHosts       = Join-Path $WinPsAllUsersRoot 'profile.ps1'
+        }
+
+        foreach ($Requested in $Scope) {
+            if (-not $LegacyMap.Contains($Requested)) { continue }
+            $Path = $LegacyMap[$Requested]
+            if ([string]::IsNullOrWhiteSpace($Path)) { continue }
+            $Targets += [pscustomobject]@{
+                Scope  = $Requested
+                Path   = $Path
+                Origin = 'WindowsPowerShell'
+            }
+        }
+    }
+
+    if (-not $Targets) {
+        Write-Warning 'No valid profile paths resolved for the requested scope(s).'
+        return
+    }
+
+    $Targets = $Targets | Sort-Object -Property Path, Origin -Unique
+
+    $SentinelStart = '# >>> pyshim auto-import >>>'
+    $SentinelEnd   = '# <<< pyshim auto-import <<<'
+    $ShimModulePath = 'C:\bin\shims\pyshim.psm1'
+    $SnippetLines = @(
+        $SentinelStart
+        "if (Test-Path '$ShimModulePath') {"
+        '    try {'
+        "        Import-Module '$ShimModulePath' -ErrorAction Stop"
+        '    } catch {'
+        '        Write-Verbose "pyshim auto-import failed: $($_.Exception.Message)"'
+        '    }'
+        '}'
+        $SentinelEnd
+    )
+    $Snippet = $SnippetLines -join "`r`n"
+
+    $IsElevated = $false
+    try {
+        $Identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+        $Principal = [Security.Principal.WindowsPrincipal]::new($Identity)
+        $IsElevated = $Principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    } catch {
+        Write-Verbose 'Unable to determine elevation status for profile updates.'
+    }
+
+    foreach ($Target in $Targets) {
+        $ProfilePath = $Target.Path
+        $ScopeName = $Target.Scope
+        $Origin = $Target.Origin
+
+        if ([string]::IsNullOrWhiteSpace($ProfilePath)) {
+            continue
+        }
+
+        $Directory = Split-Path -Parent $ProfilePath
+        if (-not $Directory) {
+            continue
+        }
+
+        $NeedsElevation = ($ScopeName -like 'AllUsers*') -or ($ProfilePath -like "$env:ProgramFiles*") -or ($ProfilePath -like "$env:WINDIR*")
+        if ($NeedsElevation -and -not $IsElevated) {
+            Write-Warning "Skipping $Origin $ScopeName profile at $ProfilePath (administrator rights required)."
+            continue
+        }
+
+        if (-not (Test-Path -LiteralPath $Directory)) {
+            if ($PSCmdlet.ShouldProcess($Directory,'Create profile directory')) {
+                New-Item -ItemType Directory -Path $Directory -Force | Out-Null
+            } else {
+                continue
+            }
+        }
+
+        $ProfileExists = Test-Path -LiteralPath $ProfilePath
+        $ExistingContent = ''
+        if ($ProfileExists) {
+            $ExistingContent = Get-Content -LiteralPath $ProfilePath -Raw
+            $HasSentinel = ($ExistingContent -match [System.Text.RegularExpressions.Regex]::Escape($SentinelStart)) -and
+                           ($ExistingContent -match [System.Text.RegularExpressions.Regex]::Escape($SentinelEnd))
+            if ($HasSentinel) {
+                Write-Verbose "pyshim auto-import block already present in $ProfilePath."
+                continue
+            }
+            if (-not $NoBackup) {
+                $BackupPath = "$ProfilePath.pyshim.bak"
+                if (-not (Test-Path -LiteralPath $BackupPath)) {
+                    Copy-Item -LiteralPath $ProfilePath -Destination $BackupPath -Force
+                }
+            }
+        } else {
+            if ($PSCmdlet.ShouldProcess($ProfilePath,'Create profile file')) {
+                New-Item -ItemType File -Path $ProfilePath -Force | Out-Null
+                $ProfileExists = $true
+                $ExistingContent = ''
+            } else {
+                continue
+            }
+        }
+
+        $AppendValue = $Snippet
+        if (-not [string]::IsNullOrEmpty($ExistingContent)) {
+            if ($ExistingContent.EndsWith("`n")) {
+                $AppendValue = "`n$Snippet"
+            } else {
+                $AppendValue = "`r`n$Snippet"
+            }
+        }
+
+        if ($PSCmdlet.ShouldProcess($ProfilePath,"Insert pyshim auto-import block for $Origin $ScopeName")) {
+            Add-Content -LiteralPath $ProfilePath -Value $AppendValue -Encoding utf8
+            Write-Host "Added pyshim auto-import to $ProfilePath ($Origin / $ScopeName)." -ForegroundColor Green
+        }
+    }
+}
+
 function Set-AppPython {
     <#
     .SYNOPSIS
@@ -1806,6 +2192,234 @@ function Run-WithPython {
         [string[]]$Args
     )
     & "C:\bin\shims\python.bat" --interpreter "$Spec" -- @Args
+}
+
+function Update-Pyshim {
+    <#
+    .SYNOPSIS
+        Download the latest pyshim release from GitHub and rerun the installer.
+    .DESCRIPTION
+        Fetches release metadata, downloads Install-Pyshim.ps1, executes it, and refreshes the
+        current session's module import. Defaults to the latest release but can target a specific tag.
+    .PARAMETER Tag
+        Git tag to install (for example 'v0.1.1-alpha'). Defaults to the latest release.
+    .PARAMETER WritePath
+        Pass -WritePath through to the installer so C:\bin\shims is added to the user PATH when missing.
+    .PARAMETER Token
+        GitHub token used for authenticated API calls to avoid rate limiting (falls back to GITHUB_TOKEN env var).
+    .EXAMPLE
+        Update-Pyshim
+    .EXAMPLE
+        Update-Pyshim -WritePath -Tag 'v0.1.1-alpha'
+    #>
+    [CmdletBinding(SupportsShouldProcess=$true,ConfirmImpact='Medium')]
+    Param(
+        [Parameter(Mandatory=$false)]
+        [System.String]$Tag,
+
+        [Switch]$WritePath,
+
+        [System.String]$Token
+    )
+
+    $Repository = 'shruggietech/pyshim'
+    $ApiRoot = 'https://api.github.com'
+    $Headers = @{
+        'User-Agent' = 'pyshim-update'
+        'Accept'     = 'application/vnd.github+json'
+    }
+
+    if (-not $Token) {
+        $Token = [Environment]::GetEnvironmentVariable('GITHUB_TOKEN','Process')
+        if (-not $Token) {
+            $Token = [Environment]::GetEnvironmentVariable('GITHUB_TOKEN','User')
+        }
+    }
+
+    if ($Token) {
+        $Headers['Authorization'] = "Bearer $Token"
+    }
+
+    $ReleaseUri = if ($Tag) { "$ApiRoot/repos/$Repository/releases/tags/$Tag" } else { "$ApiRoot/repos/$Repository/releases/latest" }
+
+    try {
+        $Release = Invoke-RestMethod -Uri $ReleaseUri -Headers $Headers -ErrorAction Stop
+    } catch {
+        throw "Failed to query GitHub release metadata ($ReleaseUri). $_"
+    }
+
+    if (-not $Release) {
+        throw "GitHub returned no release data from $ReleaseUri."
+    }
+
+    $InstallerAsset = $Release.assets | Where-Object { $_.name -eq 'Install-Pyshim.ps1' } | Select-Object -First 1
+    if (-not $InstallerAsset) {
+        throw "The release '$($Release.tag_name)' does not expose Install-Pyshim.ps1; cannot continue."
+    }
+
+    $Sep = [IO.Path]::DirectorySeparatorChar
+    $ShimDir = "C:${Sep}bin${Sep}shims"
+    $TargetTag = if ($Release.tag_name) { $Release.tag_name } else { '(unknown tag)' }
+    if (-not $PSCmdlet.ShouldProcess($ShimDir,"Update pyshim to $TargetTag")) {
+        return
+    }
+
+    $TempRoot = [IO.Path]::GetTempPath()
+    $TempName = 'pyshim-update-' + [Guid]::NewGuid().ToString('N')
+    $WorkingDir = Join-Path $TempRoot $TempName
+    $InstallerPath = Join-Path $WorkingDir 'Install-Pyshim.ps1'
+
+    try {
+        if (-not (Test-Path -LiteralPath $WorkingDir)) {
+            New-Item -ItemType Directory -Path $WorkingDir -Force | Out-Null
+        }
+
+        try {
+            Invoke-WebRequest -Uri $InstallerAsset.browser_download_url -OutFile $InstallerPath -Headers $Headers -ErrorAction Stop
+        } catch {
+            throw "Failed to download Install-Pyshim.ps1 from $($InstallerAsset.browser_download_url). $_"
+        }
+
+        $Arguments = @('-ExecutionPolicy','Bypass','-File',$InstallerPath)
+        if ($WritePath) {
+            $Arguments += '-WritePath'
+        }
+
+        & powershell.exe @Arguments
+        $ExitCode = $LASTEXITCODE
+
+        if ($ExitCode -ne 0) {
+            throw "Install-Pyshim.ps1 exited with code $ExitCode."
+        }
+
+        $ModulePath = Join-Path $ShimDir 'pyshim.psm1'
+        if (Test-Path -LiteralPath $ModulePath) {
+            Import-Module $ModulePath -Force -ErrorAction SilentlyContinue
+        }
+
+        Write-Host "pyshim updated to release $TargetTag." -ForegroundColor Green
+    } finally {
+        if (Test-Path -LiteralPath $WorkingDir) {
+            Remove-Item -LiteralPath $WorkingDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Uninstall-Pyshim {
+    <#
+    .SYNOPSIS
+        Remove pyshim files and PATH entries from the current machine.
+    .PARAMETER Force
+        Proceed even if unexpected files exist in the shim directory.
+    .PARAMETER InvokerPath
+        Internal use. Path to the executing uninstall script so cleanup can finish after exit.
+    .EXAMPLE
+        Uninstall-Pyshim
+    .EXAMPLE
+        Uninstall-Pyshim -Force
+    #>
+    [CmdletBinding(SupportsShouldProcess=$true,ConfirmImpact='High')]
+    Param(
+        [Switch]$Force,
+
+        [Parameter(Mandatory=$false)]
+        [System.String]$InvokerPath
+    )
+
+    $ShimDir = 'C:\bin\shims'
+    if (-not (Test-Path -LiteralPath $ShimDir)) {
+        Write-Host "pyshim does not appear to be installed (missing $ShimDir)." -ForegroundColor Yellow
+        return
+    }
+
+    $ExpectedCore = 'pip.bat','python.bat','pythonw.bat','pyshim.psm1','Uninstall-Pyshim.ps1'
+    $OptionalExact = 'python.env','python.nopersist'
+    $OptionalPatterns = 'python@*.env'
+
+    $Entries = Get-ChildItem -LiteralPath $ShimDir -Force
+    $Unexpected = @()
+    foreach ($Entry in $Entries) {
+        $Name = $Entry.Name
+        if ($ExpectedCore -contains $Name) { continue }
+        if ($OptionalExact -contains $Name) { continue }
+        $MatchesPattern = $false
+        foreach ($Pattern in $OptionalPatterns) {
+            if ($Name -like $Pattern) {
+                $MatchesPattern = $true
+                break
+            }
+        }
+        if ($MatchesPattern) { continue }
+        $Unexpected += $Entry
+    }
+
+    if ($Unexpected.Count -gt 0 -and -not $Force) {
+        Write-Warning "Additional files were found in $ShimDir. Re-run with -Force to remove everything."
+        foreach ($Item in $Unexpected) {
+            Write-Host "    $($Item.Name)" -ForegroundColor Yellow
+        }
+        return
+    }
+
+    $TargetNormalized = $ShimDir.TrimEnd('\\')
+    $UserPath = [Environment]::GetEnvironmentVariable('Path','User')
+    if ($UserPath) {
+        $Segments = $UserPath -split ';'
+        $Filtered = $Segments | Where-Object { $_ -and ($_.TrimEnd('\\') -ine $TargetNormalized) }
+        $NewUserPath = ($Filtered | Where-Object { $_ }) -join ';'
+        if ($NewUserPath -ne $UserPath) {
+            if ($PSCmdlet.ShouldProcess('User PATH','Remove pyshim entry')) {
+                [Environment]::SetEnvironmentVariable('Path',$NewUserPath,'User')
+                $EnvSegments = $env:Path -split ';'
+                $env:Path = ($EnvSegments | Where-Object { $_.TrimEnd('\\') -ine $TargetNormalized }) -join ';'
+                Write-Host "Removed C:\bin\shims from the user PATH." -ForegroundColor Green
+            }
+        }
+    }
+
+    $Items = Get-ChildItem -LiteralPath $ShimDir -Force
+    foreach ($Item in $Items) {
+        if ($InvokerPath -and ($Item.FullName -eq $InvokerPath)) {
+            continue
+        }
+        if ($PSCmdlet.ShouldProcess($Item.FullName,'Delete file')) {
+            Remove-Item -LiteralPath $Item.FullName -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    if ($InvokerPath) {
+        $Cleanup = {
+            param($ScriptPath,$Directory)
+            Start-Sleep -Seconds 1
+            Remove-Item -LiteralPath $ScriptPath -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $Directory -Recurse -Force -ErrorAction SilentlyContinue
+            $Parent = Split-Path -Parent $Directory
+            if ($Parent -and (Test-Path -LiteralPath $Parent)) {
+                $Remaining = Get-ChildItem -LiteralPath $Parent -Force -ErrorAction SilentlyContinue
+                if (-not $Remaining) {
+                    Remove-Item -LiteralPath $Parent -Force -ErrorAction SilentlyContinue
+                }
+            }
+        }
+        Start-Job -ScriptBlock $Cleanup -ArgumentList $InvokerPath,$ShimDir | Out-Null
+        Write-Host "Scheduled cleanup job to remove $ShimDir after this script exits." -ForegroundColor Green
+    } else {
+        if ($PSCmdlet.ShouldProcess($ShimDir,'Remove shim directory')) {
+            Remove-Item -LiteralPath $ShimDir -Recurse -Force -ErrorAction SilentlyContinue
+            $ParentDir = Split-Path -Parent $ShimDir
+            if ($ParentDir -and (Test-Path -LiteralPath $ParentDir)) {
+                $Remaining = Get-ChildItem -LiteralPath $ParentDir -Force -ErrorAction SilentlyContinue
+                if (-not $Remaining) {
+                    Remove-Item -LiteralPath $ParentDir -Force -ErrorAction SilentlyContinue
+                }
+            }
+        }
+    }
+
+    if (Get-ChildItem Env:PYSHIM_INTERPRETER -ErrorAction SilentlyContinue) {
+        Remove-Item Env:PYSHIM_INTERPRETER -ErrorAction SilentlyContinue
+    }
+    Write-Host "pyshim has been removed." -ForegroundColor Green
 }
 ```
 
@@ -1968,12 +2582,6 @@ goto :WALKUP
 py:3.12
 ```
 
-## `.\bin\shims\python.env`
-
-```bash
-C:\Users\h8rt3rmin8r\miniconda3\envs\py312\python.exe
-```
-
 ## `.\examples\python@MyService.env`
 
 ```bash
@@ -1994,7 +2602,7 @@ REM headless interpreter (best-effort)
 ```powershell
 $ErrorActionPreference = 'Stop'
 $SepLine = "`n" + ("-" * 60) + "`n"
-$TotalDurationMax = 12    # seconds
+$TotalDurationMax = 18    # seconds
 $SingleDurationMax = 3    # seconds
 $StartTime = Get-Date
 $TestsFailed = $false
@@ -2061,6 +2669,104 @@ function Invoke-TimedCommand {
         }
     }
     return $true
+}
+
+function Write-CondaStatus {
+    [CmdletBinding()]
+    Param()
+
+    Write-Host "Inspecting Conda / Miniconda environment:" -ForegroundColor Yellow
+
+    $Candidates = @()
+    if ($env:CONDA_EXE) {
+        $Candidates += $env:CONDA_EXE
+    }
+
+    try {
+        $CommandHit = (Get-Command conda -ErrorAction Stop).Source
+        if ($CommandHit) {
+            $Candidates += $CommandHit
+        }
+    } catch {
+        # ignored on purpose
+    }
+
+    $DefaultUserInstall = Join-Path -Path $env:USERPROFILE -ChildPath 'miniconda3\Scripts\conda.exe'
+    $Candidates += $DefaultUserInstall
+
+    Write-Host "    Running: (Conda detection)" -ForegroundColor Cyan
+    $Candidates = $Candidates | Where-Object { $_ } | Select-Object -Unique
+    if ($Candidates.Count -gt 0) {
+        Write-Host "    Output: Candidate paths -> $(($Candidates -join ', '))" -ForegroundColor Gray
+    } else {
+        Write-Host "    Output: No candidate paths discovered." -ForegroundColor Gray
+    }
+
+    $ResolvedConda = $null
+    foreach ($Candidate in $Candidates) {
+        $ResolvedCandidate = Resolve-Path -LiteralPath $Candidate -ErrorAction SilentlyContinue
+        if ($ResolvedCandidate) {
+            $ResolvedConda = $ResolvedCandidate.ProviderPath
+            break
+        }
+    }
+
+    if (-not $ResolvedConda) {
+        Write-Host "    Result: Conda executable not detected." -ForegroundColor Yellow
+        return
+    }
+
+    Write-Host "    Result: Found conda executable." -ForegroundColor Green
+    #Write-Host "    Output: $ResolvedConda" -ForegroundColor Gray
+
+    Write-Host "    Running: $ResolvedConda --version" -ForegroundColor Cyan
+    $VersionOutput = & $ResolvedConda '--version' 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "    Output: $((($VersionOutput | Out-String).Trim()))" -ForegroundColor Gray
+    } else {
+        Write-Host "    Output: Unable to determine conda version." -ForegroundColor Yellow
+    }
+
+    Write-Host "    Running: $ResolvedConda env list --json" -ForegroundColor Cyan
+    $EnvJsonRaw = & $ResolvedConda 'env' 'list' '--json' 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "    Output: Unable to enumerate conda environments." -ForegroundColor Yellow
+        return
+    }
+
+    try {
+        $EnvInfo = ($EnvJsonRaw | Out-String | ConvertFrom-Json)
+    } catch {
+        Write-Host "    Output: Failed to parse conda environment list." -ForegroundColor Yellow
+        return
+    }
+
+    if (-not $EnvInfo -or -not $EnvInfo.envs) {
+        Write-Host "    Output: No conda environments reported." -ForegroundColor Yellow
+        return
+    }
+
+    $TargetEnvs = 'py310','py311','py312','py313','py314'
+    $EnvSummaries = @()
+    foreach ($Target in $TargetEnvs) {
+        $MatchingPath = $EnvInfo.envs | Where-Object { $_.Split([IO.Path]::DirectorySeparatorChar)[-1].ToLower() -eq $Target }
+        if (-not $MatchingPath) {
+            $EnvSummaries += ('{0}: missing' -f $Target)
+            continue
+        }
+
+        #Write-Host "    Running: $ResolvedConda run -n $Target python -c 'import sys; print(sys.version.split()[0])'" -ForegroundColor Cyan
+        $VersionProbe = & $ResolvedConda 'run' '-n' $Target 'python' '-c' 'import sys; print(sys.version.split()[0])' 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            $EnvSummaries += ('{0}: {1}' -f $Target, (($VersionProbe | Out-String).Trim()))
+        } else {
+            $EnvSummaries += ('{0}: version query failed' -f $Target)
+        }
+    }
+
+    if ($EnvSummaries.Count -gt 0) {
+        Write-Host "    Output: $($EnvSummaries -join ', ')" -ForegroundColor Gray
+    }
 }
 
 #-------------------------------------------------------------------------------
@@ -2174,6 +2880,10 @@ if (Test-Path -LiteralPath $UncPath -ErrorAction SilentlyContinue) {
 
 #-------------------------------------------------------------------------------
 $SepLine | Write-Host
+Write-CondaStatus
+
+#-------------------------------------------------------------------------------
+$SepLine | Write-Host
 $EndTime = Get-Date
 $TotalDuration = ($EndTime - $StartTime).TotalSeconds
 
@@ -2192,5 +2902,117 @@ if ($TestsFailed) {
     Write-Host "Smoke OK (Tests passed successfully)." -ForegroundColor Green
     Write-Host "Exiting script." -ForegroundColor Green
     exit 0
+}
+```
+
+## `.\bin\shims\Uninstall-Pyshim.ps1`
+
+```powershell
+[CmdletBinding(SupportsShouldProcess=$true,ConfirmImpact='High')]
+Param(
+    [Switch]$Force
+)
+
+$ShimDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ModulePath = Join-Path -Path $ShimDir -ChildPath 'pyshim.psm1'
+
+function Invoke-StandalonePyshimUninstall {
+    Param(
+        [Switch]$Force,
+        [Parameter(Mandatory=$false)]
+        [System.String]$InvokerPath
+    )
+
+    if ($InvokerPath) {
+        $ShimDir = Split-Path -Parent $InvokerPath
+    }
+    if (-not $ShimDir) { $ShimDir = 'C:\bin\shims' }
+
+    $ExpectedCore = 'pip.bat','python.bat','pythonw.bat','pyshim.psm1','Uninstall-Pyshim.ps1'
+    $OptionalExact = 'python.env','python.nopersist'
+    $OptionalPatterns = 'python@*.env'
+
+    if (-not (Test-Path -LiteralPath $ShimDir)) {
+        Write-Host "pyshim already appears to be removed (missing $ShimDir)." -ForegroundColor Yellow
+        return
+    }
+
+    $Entries = Get-ChildItem -LiteralPath $ShimDir -Force
+    $Unexpected = @()
+    foreach ($Entry in $Entries) {
+        $Name = $Entry.Name
+        if ($ExpectedCore -contains $Name) { continue }
+        if ($OptionalExact -contains $Name) { continue }
+        $MatchesPattern = $false
+        foreach ($Pattern in $OptionalPatterns) {
+            if ($Name -like $Pattern) {
+                $MatchesPattern = $true
+                break
+            }
+        }
+        if ($MatchesPattern) { continue }
+        $Unexpected += $Entry
+    }
+
+    if ($Unexpected.Count -gt 0 -and -not $Force) {
+        Write-Warning "Additional files were found in $ShimDir. Re-run with -Force to remove everything."
+        foreach ($Item in $Unexpected) {
+            Write-Host "    $($Item.Name)" -ForegroundColor Yellow
+        }
+        return
+    }
+
+    $UserPath = [Environment]::GetEnvironmentVariable('Path','User')
+    if ($UserPath) {
+        $Target = $ShimDir.TrimEnd('\\')
+        $Parts = $UserPath -split ';'
+        $Filtered = $Parts | Where-Object { $_ -and ($_.TrimEnd('\\') -ine $Target) }
+        $NewUserPath = ($Filtered | Where-Object { $_ }) -join ';'
+        if ($NewUserPath -ne $UserPath) {
+            [Environment]::SetEnvironmentVariable('Path',$NewUserPath,'User')
+            $EnvParts = $env:Path -split ';'
+            $env:Path = ($EnvParts | Where-Object { $_.TrimEnd('\\') -ine $Target }) -join ';'
+            Write-Host "Removed C:\bin\shims from the user PATH." -ForegroundColor Green
+        }
+    }
+
+    $Items = Get-ChildItem -LiteralPath $ShimDir -Force
+    foreach ($Item in $Items) {
+        if ($InvokerPath -and ($Item.FullName -eq $InvokerPath)) {
+            continue
+        }
+        Remove-Item -LiteralPath $Item.FullName -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    if ($InvokerPath) {
+        $Cleanup = {
+            param($ScriptPath,$Directory)
+            Start-Sleep -Seconds 1
+            Remove-Item -LiteralPath $ScriptPath -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $Directory -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        Start-Job -ScriptBlock $Cleanup -ArgumentList $InvokerPath,$ShimDir | Out-Null
+        Write-Host "Scheduled cleanup job to remove $ShimDir after this script exits." -ForegroundColor Green
+    } else {
+        Remove-Item -LiteralPath $ShimDir -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Host "Removed $ShimDir." -ForegroundColor Green
+    }
+}
+
+if (Test-Path -LiteralPath $ModulePath) {
+    try {
+        Import-Module -Name $ModulePath -Force -DisableNameChecking
+    } catch {
+        Write-Warning "Failed to import pyshim module; falling back to standalone uninstall logic."
+    }
+}
+
+if (Get-Command -Name Uninstall-Pyshim -ErrorAction SilentlyContinue) {
+    $Params = @{ }
+    if ($Force) { $Params.Force = $true }
+    $Params.InvokerPath = $MyInvocation.MyCommand.Path
+    Uninstall-Pyshim @Params
+} else {
+    Invoke-StandalonePyshimUninstall -Force:$Force -InvokerPath $MyInvocation.MyCommand.Path
 }
 ```
