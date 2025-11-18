@@ -84,6 +84,183 @@ function Enable-PythonPersistence {
     Write-Host "Removed nopersist marker. Global persistence active again."
 }
 
+function Enable-PyshimProfile {
+    <#
+    .SYNOPSIS
+        Append a guarded pyshim import block to PowerShell profile files.
+    .DESCRIPTION
+        Ensures the pyshim module auto-loads for selected profile scopes without clobbering existing
+        content. Creates profile files when missing, preserves backups, and inserts a sentinel block
+        only when it is not already present. Defaults to CurrentUserAllHosts and CurrentUserCurrentHost
+        for the active pwsh installation; optionally includes Windows PowerShell profiles.
+    .PARAMETER Scope
+        One or more profile scopes to update. Defaults to CurrentUserAllHosts and CurrentUserCurrentHost.
+        Valid values: CurrentUserCurrentHost, CurrentUserAllHosts, AllUsersCurrentHost, AllUsersAllHosts.
+    .PARAMETER IncludeWindowsPowerShell
+        Also update the equivalent Windows PowerShell 5.x profiles under WindowsPowerShell directories.
+    .PARAMETER NoBackup
+        Skip creating a .pyshim.bak backup alongside existing profile files.
+    .EXAMPLE
+        Enable-PyshimProfile
+    .EXAMPLE
+        Enable-PyshimProfile -Scope AllUsersAllHosts -IncludeWindowsPowerShell
+    #>
+    [CmdletBinding(SupportsShouldProcess=$true)]
+    Param(
+        [Parameter(Mandatory=$false)]
+        [ValidateSet('CurrentUserCurrentHost','CurrentUserAllHosts','AllUsersCurrentHost','AllUsersAllHosts')]
+        [string[]]$Scope = @('CurrentUserAllHosts','CurrentUserCurrentHost'),
+
+        [Switch]$IncludeWindowsPowerShell,
+
+        [Switch]$NoBackup
+    )
+
+    $ProfileMap = [ordered]@{
+        CurrentUserCurrentHost = $PROFILE.CurrentUserCurrentHost
+        CurrentUserAllHosts    = $PROFILE.CurrentUserAllHosts
+        AllUsersCurrentHost    = $PROFILE.AllUsersCurrentHost
+        AllUsersAllHosts       = $PROFILE.AllUsersAllHosts
+    }
+
+    $Targets = @()
+    foreach ($Requested in $Scope) {
+        if (-not $ProfileMap.Contains($Requested)) { continue }
+        $Path = $ProfileMap[$Requested]
+        if ([string]::IsNullOrWhiteSpace($Path)) { continue }
+        $Targets += [pscustomobject]@{
+            Scope  = $Requested
+            Path   = $Path
+            Origin = 'pwsh'
+        }
+    }
+
+    if ($IncludeWindowsPowerShell) {
+        $UserDocuments = [Environment]::GetFolderPath('MyDocuments')
+        $WinPsUserRoot = Join-Path $UserDocuments 'WindowsPowerShell'
+        $WinPsAllUsersRoot = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0'
+
+        $LegacyMap = [ordered]@{
+            CurrentUserCurrentHost = Join-Path $WinPsUserRoot 'Microsoft.PowerShell_profile.ps1'
+            CurrentUserAllHosts    = Join-Path $WinPsUserRoot 'profile.ps1'
+            AllUsersCurrentHost    = Join-Path $WinPsAllUsersRoot 'Microsoft.PowerShell_profile.ps1'
+            AllUsersAllHosts       = Join-Path $WinPsAllUsersRoot 'profile.ps1'
+        }
+
+        foreach ($Requested in $Scope) {
+            if (-not $LegacyMap.Contains($Requested)) { continue }
+            $Path = $LegacyMap[$Requested]
+            if ([string]::IsNullOrWhiteSpace($Path)) { continue }
+            $Targets += [pscustomobject]@{
+                Scope  = $Requested
+                Path   = $Path
+                Origin = 'WindowsPowerShell'
+            }
+        }
+    }
+
+    if (-not $Targets) {
+        Write-Warning 'No valid profile paths resolved for the requested scope(s).'
+        return
+    }
+
+    $Targets = $Targets | Sort-Object -Property Path, Origin -Unique
+
+    $SentinelStart = '# >>> pyshim auto-import >>>'
+    $SentinelEnd   = '# <<< pyshim auto-import <<<'
+    $ShimModulePath = 'C:\bin\shims\pyshim.psm1'
+    $SnippetLines = @(
+        $SentinelStart
+        "if (Test-Path '$ShimModulePath') {"
+        '    try {'
+        "        Import-Module '$ShimModulePath' -ErrorAction Stop"
+        '    } catch {'
+        '        Write-Verbose "pyshim auto-import failed: $($_.Exception.Message)"'
+        '    }'
+        '}'
+        $SentinelEnd
+    )
+    $Snippet = $SnippetLines -join "`r`n"
+
+    $IsElevated = $false
+    try {
+        $Identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+        $Principal = [Security.Principal.WindowsPrincipal]::new($Identity)
+        $IsElevated = $Principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    } catch {
+        Write-Verbose 'Unable to determine elevation status for profile updates.'
+    }
+
+    foreach ($Target in $Targets) {
+        $ProfilePath = $Target.Path
+        $ScopeName = $Target.Scope
+        $Origin = $Target.Origin
+
+        if ([string]::IsNullOrWhiteSpace($ProfilePath)) {
+            continue
+        }
+
+        $Directory = Split-Path -Parent $ProfilePath
+        if (-not $Directory) {
+            continue
+        }
+
+        $NeedsElevation = ($ScopeName -like 'AllUsers*') -or ($ProfilePath -like "$env:ProgramFiles*") -or ($ProfilePath -like "$env:WINDIR*")
+        if ($NeedsElevation -and -not $IsElevated) {
+            Write-Warning "Skipping $Origin $ScopeName profile at $ProfilePath (administrator rights required)."
+            continue
+        }
+
+        if (-not (Test-Path -LiteralPath $Directory)) {
+            if ($PSCmdlet.ShouldProcess($Directory,'Create profile directory')) {
+                New-Item -ItemType Directory -Path $Directory -Force | Out-Null
+            } else {
+                continue
+            }
+        }
+
+        $ProfileExists = Test-Path -LiteralPath $ProfilePath
+        $ExistingContent = ''
+        if ($ProfileExists) {
+            $ExistingContent = Get-Content -LiteralPath $ProfilePath -Raw
+            $HasSentinel = ($ExistingContent -match [System.Text.RegularExpressions.Regex]::Escape($SentinelStart)) -and
+                           ($ExistingContent -match [System.Text.RegularExpressions.Regex]::Escape($SentinelEnd))
+            if ($HasSentinel) {
+                Write-Verbose "pyshim auto-import block already present in $ProfilePath."
+                continue
+            }
+            if (-not $NoBackup) {
+                $BackupPath = "$ProfilePath.pyshim.bak"
+                if (-not (Test-Path -LiteralPath $BackupPath)) {
+                    Copy-Item -LiteralPath $ProfilePath -Destination $BackupPath -Force
+                }
+            }
+        } else {
+            if ($PSCmdlet.ShouldProcess($ProfilePath,'Create profile file')) {
+                New-Item -ItemType File -Path $ProfilePath -Force | Out-Null
+                $ProfileExists = $true
+                $ExistingContent = ''
+            } else {
+                continue
+            }
+        }
+
+        $AppendValue = $Snippet
+        if (-not [string]::IsNullOrEmpty($ExistingContent)) {
+            if ($ExistingContent.EndsWith("`n")) {
+                $AppendValue = "`n$Snippet"
+            } else {
+                $AppendValue = "`r`n$Snippet"
+            }
+        }
+
+        if ($PSCmdlet.ShouldProcess($ProfilePath,"Insert pyshim auto-import block for $Origin $ScopeName")) {
+            Add-Content -LiteralPath $ProfilePath -Value $AppendValue -Encoding utf8
+            Write-Host "Added pyshim auto-import to $ProfilePath ($Origin / $ScopeName)." -ForegroundColor Green
+        }
+    }
+}
+
 function Set-AppPython {
     <#
     .SYNOPSIS
@@ -120,6 +297,117 @@ function Run-WithPython {
         [string[]]$Args
     )
     & "C:\bin\shims\python.bat" --interpreter "$Spec" -- @Args
+}
+
+function Update-Pyshim {
+    <#
+    .SYNOPSIS
+        Download the latest pyshim release from GitHub and rerun the installer.
+    .DESCRIPTION
+        Fetches release metadata, downloads Install-Pyshim.ps1, executes it, and refreshes the
+        current session's module import. Defaults to the latest release but can target a specific tag.
+    .PARAMETER Tag
+        Git tag to install (for example 'v0.1.1-alpha'). Defaults to the latest release.
+    .PARAMETER WritePath
+        Pass -WritePath through to the installer so C:\bin\shims is added to the user PATH when missing.
+    .PARAMETER Token
+        GitHub token used for authenticated API calls to avoid rate limiting (falls back to GITHUB_TOKEN env var).
+    .EXAMPLE
+        Update-Pyshim
+    .EXAMPLE
+        Update-Pyshim -WritePath -Tag 'v0.1.1-alpha'
+    #>
+    [CmdletBinding(SupportsShouldProcess=$true,ConfirmImpact='Medium')]
+    Param(
+        [Parameter(Mandatory=$false)]
+        [System.String]$Tag,
+
+        [Switch]$WritePath,
+
+        [System.String]$Token
+    )
+
+    $Repository = 'shruggietech/pyshim'
+    $ApiRoot = 'https://api.github.com'
+    $Headers = @{
+        'User-Agent' = 'pyshim-update'
+        'Accept'     = 'application/vnd.github+json'
+    }
+
+    if (-not $Token) {
+        $Token = [Environment]::GetEnvironmentVariable('GITHUB_TOKEN','Process')
+        if (-not $Token) {
+            $Token = [Environment]::GetEnvironmentVariable('GITHUB_TOKEN','User')
+        }
+    }
+
+    if ($Token) {
+        $Headers['Authorization'] = "Bearer $Token"
+    }
+
+    $ReleaseUri = if ($Tag) { "$ApiRoot/repos/$Repository/releases/tags/$Tag" } else { "$ApiRoot/repos/$Repository/releases/latest" }
+
+    try {
+        $Release = Invoke-RestMethod -Uri $ReleaseUri -Headers $Headers -ErrorAction Stop
+    } catch {
+        throw "Failed to query GitHub release metadata ($ReleaseUri). $_"
+    }
+
+    if (-not $Release) {
+        throw "GitHub returned no release data from $ReleaseUri."
+    }
+
+    $InstallerAsset = $Release.assets | Where-Object { $_.name -eq 'Install-Pyshim.ps1' } | Select-Object -First 1
+    if (-not $InstallerAsset) {
+        throw "The release '$($Release.tag_name)' does not expose Install-Pyshim.ps1; cannot continue."
+    }
+
+    $Sep = [IO.Path]::DirectorySeparatorChar
+    $ShimDir = "C:${Sep}bin${Sep}shims"
+    $TargetTag = if ($Release.tag_name) { $Release.tag_name } else { '(unknown tag)' }
+    if (-not $PSCmdlet.ShouldProcess($ShimDir,"Update pyshim to $TargetTag")) {
+        return
+    }
+
+    $TempRoot = [IO.Path]::GetTempPath()
+    $TempName = 'pyshim-update-' + [Guid]::NewGuid().ToString('N')
+    $WorkingDir = Join-Path $TempRoot $TempName
+    $InstallerPath = Join-Path $WorkingDir 'Install-Pyshim.ps1'
+
+    try {
+        if (-not (Test-Path -LiteralPath $WorkingDir)) {
+            New-Item -ItemType Directory -Path $WorkingDir -Force | Out-Null
+        }
+
+        try {
+            Invoke-WebRequest -Uri $InstallerAsset.browser_download_url -OutFile $InstallerPath -Headers $Headers -ErrorAction Stop
+        } catch {
+            throw "Failed to download Install-Pyshim.ps1 from $($InstallerAsset.browser_download_url). $_"
+        }
+
+        $Arguments = @('-ExecutionPolicy','Bypass','-File',$InstallerPath)
+        if ($WritePath) {
+            $Arguments += '-WritePath'
+        }
+
+        & powershell.exe @Arguments
+        $ExitCode = $LASTEXITCODE
+
+        if ($ExitCode -ne 0) {
+            throw "Install-Pyshim.ps1 exited with code $ExitCode."
+        }
+
+        $ModulePath = Join-Path $ShimDir 'pyshim.psm1'
+        if (Test-Path -LiteralPath $ModulePath) {
+            Import-Module $ModulePath -Force -ErrorAction SilentlyContinue
+        }
+
+        Write-Host "pyshim updated to release $TargetTag." -ForegroundColor Green
+    } finally {
+        if (Test-Path -LiteralPath $WorkingDir) {
+            Remove-Item -LiteralPath $WorkingDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
 }
 
 function Uninstall-Pyshim {

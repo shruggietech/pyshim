@@ -49,6 +49,23 @@ When you call `python`, pyshim resolves the appropriate interpreter using this p
 
 ---
 
+## Prerequisites
+
+- Install **PowerShell 7 (pwsh)**. On Windows 11, run:
+
+   ```powershell
+   winget install --id Microsoft.PowerShell --source winget
+   ```
+
+   The Microsoft Store package or the MSI from GitHub works too—just make sure `pwsh.exe` ends up on your PATH. Windows PowerShell 5.x is not enough for pyshim’s module helpers.
+- (Recommended) Set an execution policy for your account so profile scripts can run:
+
+   ```powershell
+   Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+   ```
+
+   Execute that inside PowerShell 7; you can tighten it again once profiles are configured.
+
 ## Install (Recommended)
 
 1. **Install the Windows Python Launcher** (if you do not already have `py.exe`):
@@ -75,13 +92,14 @@ When you call `python`, pyshim resolves the appropriate interpreter using this p
 
    Supply `-ForceRecreate` to rebuild existing envs or `-CondaPath` if `conda.exe` lives elsewhere.
 
-5. **Load the module in PowerShell** (add this to your profile for persistence):
+5. **Auto-load the module in PowerShell** so every shell gets the shim helpers:
 
    ```powershell
    Import-Module 'C:\bin\shims\pyshim.psm1'
+   Enable-PyshimProfile
    ```
 
-   Restart any open terminals afterward so they pick up the PATH change.
+   This appends a guarded import block to your current-user profiles without touching existing content. Add `-Scope AllUsersAllHosts` and run in an elevated pwsh if you want it system-wide. Restart open terminals afterward so they pick up the refreshed PATH.
 
 ### Manual install (advanced)
 
@@ -90,7 +108,7 @@ You can still do things the hard way if you want complete manual control:
 1. Create `C:\bin\shims` yourself.
 2. Copy `python.bat`, `pip.bat`, `pythonw.bat`, `pyshim.psm1`, and `Uninstall-Pyshim.ps1` into that folder.
 3. Put `C:\bin\shims` at the front of your user PATH.
-4. Import the module from your PowerShell profile.
+4. Import the module from your PowerShell profile (or run `Enable-PyshimProfile` after importing the module once).
 
 The single-file installer automates all of these steps, so prefer it for real machines.
 
@@ -111,6 +129,27 @@ The uninstaller:
 3. Deletes the shim directory (including any persisted specs like `python.env`).
 
 If you added `Import-Module 'C:\bin\shims\pyshim.psm1'` to your PowerShell profile, remove that line manually. After the script runs, restart your shells to pick up the cleaned PATH.
+
+---
+
+## Update
+
+To pick up the newest release without hunting through GitHub, run the module helper:
+
+```powershell
+Update-Pyshim
+```
+
+By default it grabs the latest release asset and reruns `Install-Pyshim.ps1` for you. Add `-WritePath` if you also want to ensure `C:\bin\shims` stays on your PATH, or `-Tag 'v0.1.1-alpha'` to pin a specific release. Supply a `GITHUB_TOKEN` environment variable (or pass `-Token`) if your network sits behind aggressive rate limiting.
+
+---
+
+## Auto-load in PowerShell
+
+- Run `Enable-PyshimProfile` after importing the module to append a guarded auto-import block to your `CurrentUser` profiles. Re-run it anytime; the sentinel comments prevent duplicates.
+- Pass `-Scope AllUsersAllHosts` (and run elevated) to cover background agents or shared build accounts. Add `-IncludeWindowsPowerShell` if you still launch legacy `powershell.exe` shells that need the shim.
+- The cmdlet creates `.pyshim.bak` backups the first time it touches each profile unless you pass `-NoBackup`. Opening profiles with `-NoProfile` skips the block by definition.
+- The inserted code simply checks for `C:\bin\shims\pyshim.psm1` and imports it with `Write-Verbose` logging when anything goes sideways, so your existing profile customizations stay in control.
 
 ---
 
@@ -252,17 +291,16 @@ Run-WithPython -Spec 'py:3.11' -- -c "print('hello from 3.11')"
 
 ```text
 C:\
-└── bin\
-    └── shims\
-        ├── python.bat
-        ├── pip.bat
-        ├── pythonw.bat
-        ├── pyshim.psm1
-      ├── Uninstall-Pyshim.ps1
-      ├── python.env
-      ├── python@MyService.env
-      └── python.nopersist
+\-- bin\
+   \-- shims\
+      |-- python.bat
+      |-- pip.bat
+      |-- pythonw.bat
+      |-- pyshim.psm1
+      \-- Uninstall-Pyshim.ps1
 ```
+
+The installer only drops the files above. Runtime metadata such as `python.env`, `python.nopersist`, or any `python@*.env` files show up later when you use the module; they aren't part of the shipped tree.
 
 ---
 
