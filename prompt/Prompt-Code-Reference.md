@@ -573,6 +573,27 @@ if ($Help -or ($PSCmdlet.ParameterSetName -eq 'HelpText')) {
     exit 0
 }
 
+function Write-PyshimMessage {
+    Param(
+        [Parameter(Mandatory=$true)]
+        [ValidateSet('Info','Action','Success','Warning','Error')]
+        [string]$Type,
+
+        [Parameter(Mandatory=$true)]
+        [string]$Message
+    )
+
+    switch ($Type) {
+        'Info'    { $Color = 'Cyan' }
+        'Action'  { $Color = 'Blue' }
+        'Success' { $Color = 'Green' }
+        'Warning' { $Color = 'Yellow' }
+        'Error'   { $Color = 'Red' }
+    }
+
+    Write-Host $Message -ForegroundColor $Color
+}
+
 function Resolve-CondaExecutable {
     Param(
         [Parameter(Mandatory=$false)]
@@ -628,10 +649,15 @@ function Invoke-CondaCommand {
 
 $ResolvedConda = Resolve-CondaExecutable -Candidate $CondaPath
 if (-not $ResolvedConda) {
+    Write-PyshimMessage -Type Error -Message 'Unable to locate conda.exe. Install Miniconda and/or supply -CondaPath.'
     throw "Unable to locate conda.exe. Install Miniconda and/or supply -CondaPath."
 }
 
-Write-Host "Using conda: $ResolvedConda" -ForegroundColor Cyan
+Write-PyshimMessage -Type Info -Message "Using conda at $ResolvedConda"
+Write-PyshimMessage -Type Info -Message 'Target environments: py310, py311, py312, py313, py314'
+if ($ForceRecreate) {
+    Write-PyshimMessage -Type Warning -Message 'ForceRecreate requested; existing environments will be rebuilt.'
+}
 
 $TargetVersions = [ordered]@{
     'py310' = '3.10'
@@ -662,18 +688,19 @@ foreach ($Entry in $TargetVersions.GetEnumerator()) {
             $VersionProbe = Invoke-CondaCommand -CondaExe $ResolvedConda -Arguments @('run','-n',$EnvName,'python','-c','import sys; print(sys.version.split()[0])')
             $ReportedVersion = $VersionProbe.Trim()
             if ($ReportedVersion.StartsWith($Version)) {
-                Write-Host "Environment '$EnvName' already provides Python $ReportedVersion; skipping." -ForegroundColor Green
+                Write-PyshimMessage -Type Success -Message "Environment '$EnvName' already provides Python $ReportedVersion; skipping."
                 $NeedsCreation = $false
             } else {
-                Write-Host "Environment '$EnvName' reports Python $ReportedVersion (expected $Version). Recreating." -ForegroundColor Yellow
+                Write-PyshimMessage -Type Warning -Message "Environment '$EnvName' reports Python $ReportedVersion (expected $Version). Recreating."
             }
         } catch {
-            Write-Warning "Failed to probe Python version for '$EnvName'. Environment will be recreated."
+            Write-PyshimMessage -Type Warning -Message "Failed to probe Python version for '$EnvName'. Environment will be recreated."
         }
     }
 
     if ($Existing -and ($ForceRecreate -or $NeedsCreation)) {
         if ($PSCmdlet.ShouldProcess($EnvName,'Remove existing conda environment')) {
+            Write-PyshimMessage -Type Action -Message "Removing existing environment '$EnvName'"
             Invoke-CondaCommand -CondaExe $ResolvedConda -Arguments @('env','remove','-n',$EnvName,'-y') | Out-Null
         }
         $NeedsCreation = $true
@@ -681,14 +708,15 @@ foreach ($Entry in $TargetVersions.GetEnumerator()) {
 
     if ($NeedsCreation) {
         if ($PSCmdlet.ShouldProcess($EnvName,"Create Python $Version environment")) {
+            Write-PyshimMessage -Type Action -Message "Creating environment '$EnvName' (Python $Version)"
             Invoke-CondaCommand -CondaExe $ResolvedConda -Arguments @('create','-n',$EnvName,"python=$Version",'--yes','--quiet','--no-default-packages') | Out-Null
             $Verify = Invoke-CondaCommand -CondaExe $ResolvedConda -Arguments @('run','-n',$EnvName,'python','-V')
-            Write-Host "Created '$EnvName': $($Verify.Trim())" -ForegroundColor Cyan
+            Write-PyshimMessage -Type Success -Message "Created '$EnvName': $($Verify.Trim())"
         }
     }
 }
 
-Write-Host "Requested Python environments are ready." -ForegroundColor Green
+Write-PyshimMessage -Type Success -Message 'Requested Python environments are ready.'
 ```
 
 ## `.\dist\Install-Pyshim.ps1`
@@ -1021,6 +1049,27 @@ __PYSHIM_EMBEDDED_ARCHIVE__
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
+function Write-PyshimMessage {
+    Param(
+        [Parameter(Mandatory=$true)]
+        [ValidateSet('Info','Action','Success','Warning','Error')]
+        [string]$Type,
+
+        [Parameter(Mandatory=$true)]
+        [string]$Message
+    )
+
+    switch ($Type) {
+        'Info'    { $Color = 'Cyan' }
+        'Action'  { $Color = 'Blue' }
+        'Success' { $Color = 'Green' }
+        'Warning' { $Color = 'Yellow' }
+        'Error'   { $Color = 'Red' }
+    }
+
+    Write-Host $Message -ForegroundColor $Color
+}
+
 function Add-PyshimPathEntry {
     Param(
         [Parameter(Mandatory=$true)]
@@ -1097,18 +1146,28 @@ $ShimDir = 'C:\bin\shims'
 $WorkingRoot = Join-Path -Path ([IO.Path]::GetTempPath()) -ChildPath ("pyshim_" + [Guid]::NewGuid().ToString('N'))
 $Null = New-Item -ItemType Directory -Path $WorkingRoot -Force
 
+Write-PyshimMessage -Type Info -Message 'Starting pyshim installation.'
+Write-PyshimMessage -Type Info -Message "Target directory: $ShimDir"
+Write-PyshimMessage -Type Action -Message 'Extracting embedded payload to a temporary staging folder.'
+
 try {
     Expand-PyshimArchive -DestinationPath $WorkingRoot
     $PayloadSource = $WorkingRoot
+    Write-PyshimMessage -Type Success -Message "Payload unpacked to $WorkingRoot"
 
     if (-not (Test-Path -LiteralPath $ShimDir)) {
         if ($PSCmdlet.ShouldProcess($ShimDir,'Create shim directory')) {
+            Write-PyshimMessage -Type Action -Message "Creating shim directory at $ShimDir"
             New-Item -ItemType Directory -Path $ShimDir -Force | Out-Null
         }
+    } else {
+        Write-PyshimMessage -Type Info -Message "Shim directory already exists at $ShimDir"
     }
 
     if ($PSCmdlet.ShouldProcess($ShimDir,'Copy embedded shims')) {
+        Write-PyshimMessage -Type Action -Message "Copying shim payload into $ShimDir"
         Copy-Item -Path (Join-Path -Path $PayloadSource -ChildPath '*') -Destination $ShimDir -Recurse -Force
+        Write-PyshimMessage -Type Success -Message 'Shim files refreshed.'
     }
 } finally {
     if (Test-Path -LiteralPath $WorkingRoot) {
@@ -1121,8 +1180,8 @@ $AllScopes = @($PathScopes.Process,$PathScopes.User,$PathScopes.Machine)
 $PathPresent = Test-PyshimPathPresence -TargetPath $ShimDir -Scopes $AllScopes
 
 if ($PathPresent) {
-    Write-Host "C:\bin\shims already present in PATH." -ForegroundColor Green
-    exit 0
+    Write-PyshimMessage -Type Success -Message "C:\bin\shims already present in PATH. Installation complete."
+    return
 }
 
 $ShouldWritePath = $false
@@ -1143,13 +1202,15 @@ if ($ShouldWritePath) {
         if (-not ($EnvEntries | Where-Object { $_.TrimEnd('\\') -ieq $ShimDir.TrimEnd('\\') })) {
             $env:Path = ($EnvEntries + $ShimDir | Where-Object { $_ }) -join ';'
         }
-        Write-Host "Added 'C:\bin\shims' to the user PATH. Restart existing shells." -ForegroundColor Green
+        Write-PyshimMessage -Type Success -Message "Added 'C:\bin\shims' to the user PATH. Restart existing shells."
+        Write-PyshimMessage -Type Success -Message 'pyshim installation complete.'
     }
-    exit 0
+    return
 } else {
-    Write-Host "Skipped PATH update. To add it later run:" -ForegroundColor Yellow
-    Write-Host "    [Environment]::SetEnvironmentVariable('Path',( '{0};' + [Environment]::GetEnvironmentVariable('Path','User')).Trim(';'),'User')" -f $ShimDir
-    exit 0
+    Write-PyshimMessage -Type Warning -Message "Skipped PATH update. To add it later run:"
+    Write-Host ("    [Environment]::SetEnvironmentVariable('Path',( '{0};' + [Environment]::GetEnvironmentVariable('Path','User')).Trim(';'),'User')" -f $ShimDir) -ForegroundColor Yellow
+    Write-PyshimMessage -Type Success -Message 'pyshim installation complete.'
+    return
 }
 ```
 
@@ -2908,6 +2969,24 @@ if ($TestsFailed) {
 ## `.\bin\shims\Uninstall-Pyshim.ps1`
 
 ```powershell
+<#
+.SYNOPSIS
+Removes the pyshim shim directory and cleans up PATH entries.
+
+.DESCRIPTION
+Runs either the module-provided `Uninstall-Pyshim` cmdlet or the bundled standalone logic to delete the shim payload, optional config files, and PATH references. Provides color-coded status messages so the user can see what was removed.
+
+.PARAMETER Force
+Removes unexpected files in the shim directory instead of stopping for review.
+
+.EXAMPLE
+PS C:\> .\Uninstall-Pyshim.ps1
+Runs the uninstaller in interactive mode and leaves any unexpected files behind.
+
+.EXAMPLE
+PS C:\> .\Uninstall-Pyshim.ps1 -Force
+Forces removal of the shim directory even if extra files are present.
+#>
 [CmdletBinding(SupportsShouldProcess=$true,ConfirmImpact='High')]
 Param(
     [Switch]$Force
@@ -2915,6 +2994,27 @@ Param(
 
 $ShimDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ModulePath = Join-Path -Path $ShimDir -ChildPath 'pyshim.psm1'
+
+function Write-PyshimMessage {
+    Param(
+        [Parameter(Mandatory=$true)]
+        [ValidateSet('Info','Action','Success','Warning','Error')]
+        [string]$Type,
+
+        [Parameter(Mandatory=$true)]
+        [string]$Message
+    )
+
+    switch ($Type) {
+        'Info'    { $Color = 'Cyan' }
+        'Action'  { $Color = 'Blue' }
+        'Success' { $Color = 'Green' }
+        'Warning' { $Color = 'Yellow' }
+        'Error'   { $Color = 'Red' }
+    }
+
+    Write-Host $Message -ForegroundColor $Color
+}
 
 function Invoke-StandalonePyshimUninstall {
     Param(
@@ -2928,12 +3028,13 @@ function Invoke-StandalonePyshimUninstall {
     }
     if (-not $ShimDir) { $ShimDir = 'C:\bin\shims' }
 
+    Write-PyshimMessage -Type Info -Message "Preparing to remove pyshim from $ShimDir"
+
     $ExpectedCore = 'pip.bat','python.bat','pythonw.bat','pyshim.psm1','Uninstall-Pyshim.ps1'
     $OptionalExact = 'python.env','python.nopersist'
     $OptionalPatterns = 'python@*.env'
-
     if (-not (Test-Path -LiteralPath $ShimDir)) {
-        Write-Host "pyshim already appears to be removed (missing $ShimDir)." -ForegroundColor Yellow
+        Write-PyshimMessage -Type Warning -Message "pyshim already appears to be removed (missing $ShimDir)."
         return
     }
 
@@ -2955,7 +3056,7 @@ function Invoke-StandalonePyshimUninstall {
     }
 
     if ($Unexpected.Count -gt 0 -and -not $Force) {
-        Write-Warning "Additional files were found in $ShimDir. Re-run with -Force to remove everything."
+        Write-PyshimMessage -Type Warning -Message "Additional files were found in $ShimDir. Re-run with -Force to remove everything."
         foreach ($Item in $Unexpected) {
             Write-Host "    $($Item.Name)" -ForegroundColor Yellow
         }
@@ -2972,7 +3073,7 @@ function Invoke-StandalonePyshimUninstall {
             [Environment]::SetEnvironmentVariable('Path',$NewUserPath,'User')
             $EnvParts = $env:Path -split ';'
             $env:Path = ($EnvParts | Where-Object { $_.TrimEnd('\\') -ine $Target }) -join ';'
-            Write-Host "Removed C:\bin\shims from the user PATH." -ForegroundColor Green
+            Write-PyshimMessage -Type Success -Message 'Removed C:\bin\shims from the user PATH.'
         }
     }
 
@@ -2981,6 +3082,7 @@ function Invoke-StandalonePyshimUninstall {
         if ($InvokerPath -and ($Item.FullName -eq $InvokerPath)) {
             continue
         }
+        Write-PyshimMessage -Type Action -Message "Deleting $($Item.Name)"
         Remove-Item -LiteralPath $Item.FullName -Recurse -Force -ErrorAction SilentlyContinue
     }
 
@@ -2992,27 +3094,34 @@ function Invoke-StandalonePyshimUninstall {
             Remove-Item -LiteralPath $Directory -Recurse -Force -ErrorAction SilentlyContinue
         }
         Start-Job -ScriptBlock $Cleanup -ArgumentList $InvokerPath,$ShimDir | Out-Null
-        Write-Host "Scheduled cleanup job to remove $ShimDir after this script exits." -ForegroundColor Green
+        Write-PyshimMessage -Type Info -Message "Scheduled cleanup job to remove $ShimDir after this script exits."
     } else {
+        Write-PyshimMessage -Type Action -Message "Removing directory $ShimDir"
         Remove-Item -LiteralPath $ShimDir -Recurse -Force -ErrorAction SilentlyContinue
-        Write-Host "Removed $ShimDir." -ForegroundColor Green
+        Write-PyshimMessage -Type Success -Message "Removed $ShimDir."
     }
+
+    Write-PyshimMessage -Type Success -Message 'pyshim has been removed.'
 }
+
+Write-PyshimMessage -Type Info -Message 'Starting pyshim uninstall.'
 
 if (Test-Path -LiteralPath $ModulePath) {
     try {
         Import-Module -Name $ModulePath -Force -DisableNameChecking
     } catch {
-        Write-Warning "Failed to import pyshim module; falling back to standalone uninstall logic."
+        Write-PyshimMessage -Type Warning -Message 'Failed to import pyshim module; falling back to standalone uninstall logic.'
     }
 }
 
 if (Get-Command -Name Uninstall-Pyshim -ErrorAction SilentlyContinue) {
+    Write-PyshimMessage -Type Info -Message 'Delegating to module-provided Uninstall-Pyshim.'
     $Params = @{ }
     if ($Force) { $Params.Force = $true }
     $Params.InvokerPath = $MyInvocation.MyCommand.Path
     Uninstall-Pyshim @Params
 } else {
+    Write-PyshimMessage -Type Info -Message 'Using standalone uninstall routine.'
     Invoke-StandalonePyshimUninstall -Force:$Force -InvokerPath $MyInvocation.MyCommand.Path
 }
 ```
