@@ -276,10 +276,32 @@ Param(
             if ($ProfileExists) {
                 $ExistingContent = Get-Content -LiteralPath $ProfilePath -Raw
                 $HasSentinel = ($ExistingContent -match [System.Text.RegularExpressions.Regex]::Escape($SentinelStart)) -and
-                            ($ExistingContent -match [System.Text.RegularExpressions.Regex]::Escape($SentinelEnd))
+                               ($ExistingContent -match [System.Text.RegularExpressions.Regex]::Escape($SentinelEnd))
                 if ($HasSentinel) {
-                    Write-Verbose "pyshim auto-import block already present in $ProfilePath."
-                    continue
+                    $HasDisableFlag = $ExistingContent -match '-DisableNameChecking'
+                    if ($HasDisableFlag) {
+                        Write-Verbose "pyshim auto-import block already present in $ProfilePath."
+                        continue
+                    }
+
+                    Write-Verbose "pyshim auto-import block in $ProfilePath is outdated; refreshing with latest import command."
+                    $DisableParams = @{ Scope = @($ScopeName); NoBackup = $NoBackup; Confirm = $false }
+                    if ($Origin -eq 'WindowsPowerShell') {
+                        $DisableParams.IncludeWindowsPowerShell = $true
+                    }
+                    Disable-PyshimProfile @DisableParams | Out-Null
+
+                    if (Test-Path -LiteralPath $ProfilePath) {
+                        $ExistingContent = Get-Content -LiteralPath $ProfilePath -Raw
+                    } else {
+                        $ExistingContent = ''
+                        if ($PSCmdlet.ShouldProcess($ProfilePath,'Create profile file')) {
+                            New-Item -ItemType File -Path $ProfilePath -Force | Out-Null
+                            $ProfileExists = $true
+                        } else {
+                            continue
+                        }
+                    }
                 }
                 if (-not $NoBackup) {
                     $BackupPath = "$ProfilePath.pyshim.bak"
