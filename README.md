@@ -92,7 +92,7 @@ When you call `python`, pyshim resolves the appropriate interpreter using this p
 4. **Auto-load the module in PowerShell** so every shell gets the shim helpers:
 
    ```powershell
-   Import-Module 'C:\bin\shims\pyshim.psm1'
+   Import-Module 'C:\bin\shims\pyshim.psm1' -DisableNameChecking -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
    Enable-PyshimProfile
    ```
 
@@ -125,7 +125,7 @@ The uninstaller:
 2. Removes `C:\bin\shims` from your user PATH.
 3. Deletes the shim directory (including any persisted specs like `python.env`).
 
-If you added `Import-Module 'C:\bin\shims\pyshim.psm1'` to your PowerShell profile, remove that line manually. After the script runs, restart your shells to pick up the cleaned PATH.
+If you added `Import-Module 'C:\bin\shims\pyshim.psm1' -DisableNameChecking -ErrorAction SilentlyContinue -WarningAction SilentlyContinue` to your PowerShell profile, remove that line manually. After the script runs, restart your shells to pick up the cleaned PATH.
 
 ---
 

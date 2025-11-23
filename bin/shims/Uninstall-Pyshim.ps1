@@ -161,7 +161,7 @@ Param(
 
     if (Test-Path -LiteralPath $ModulePath) {
         try {
-            Import-Module -Name $ModulePath -Force -DisableNameChecking
+            Import-Module -Name $ModulePath -Force -DisableNameChecking -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
         } catch {
             Write-PyshimMessage -Type Warning -Message 'Failed to import pyshim module; falling back to standalone uninstall logic.'
         }

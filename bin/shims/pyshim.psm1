@@ -12,12 +12,12 @@
     Emit the detailed help for this module (equivalent to Get-Help on the file) and exit immediately.
 
 .EXAMPLE
-    Import-Module 'C:\bin\shims\pyshim.psm1' -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
-    Recommended import statement (mirrors the profile snippet the installer wires up) that avoids benign
-    warning noise while making the pyshim cmdlets available for the session.
+    Import-Module 'C:\bin\shims\pyshim.psm1' -DisableNameChecking -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
+    Recommended import statement (mirrors the profile snippet the installer wires up) that avoids verb
+    warnings and other benign noise while making the pyshim cmdlets available for the session.
 
 .EXAMPLE
-    Import-Module C:\bin\shims\pyshim.psm1 -ArgumentList -Help
+    Import-Module 'C:\bin\shims\pyshim.psm1' -DisableNameChecking -ArgumentList -Help
     Shows the module help text without importing the cmdlets.
 #>
 [CmdletBinding(SupportsShouldProcess=$true,ConfirmImpact='High',DefaultParameterSetName='Default')]
@@ -210,7 +210,7 @@ Param(
             $SentinelStart
             "if (Test-Path '$ShimModulePath') {"
             '    try {'
-            "        Import-Module '$ShimModulePath' -ErrorAction SilentlyContinue -WarningAction SilentlyContinue"
+            "        Import-Module '$ShimModulePath' -DisableNameChecking -ErrorAction SilentlyContinue -WarningAction SilentlyContinue"
             '    } catch {'
             '        Write-Verbose "pyshim auto-import failed: $($_.Exception.Message)"'
             '    }'
@@ -669,7 +669,7 @@ Param(
 
             $ModulePath = Join-Path $ShimDir 'pyshim.psm1'
             if (Test-Path -LiteralPath $ModulePath) {
-                Import-Module $ModulePath -Force -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
+                Import-Module $ModulePath -Force -DisableNameChecking -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
             }
 
             Write-Host "pyshim updated to release $TargetTag." -ForegroundColor Green
