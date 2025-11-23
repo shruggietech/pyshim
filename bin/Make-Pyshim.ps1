@@ -16,6 +16,10 @@
     Without this switch the script will prompt for confirmation.
 .PARAMETER Help
     Display the full help text for this script.
+.PARAMETER SkipCondaRefresh
+    Skip the default Conda environment refresh that runs after the shims are copied.
+.PARAMETER CondaPath
+    Path to conda.exe when auto-detection via CONDA_EXE, PATH, or %USERPROFILE%\miniconda3 fails.
 .EXAMPLE
     .\Make-Pyshim.ps1 -WritePath
 
@@ -27,6 +31,12 @@ Param(
     [Parameter(Mandatory=$false,ParameterSetName='Default')]
     [Alias("Path","P")]
     [Switch]$WritePath,
+
+    [Parameter(Mandatory=$false,ParameterSetName='Default')]
+    [Switch]$SkipCondaRefresh,
+
+    [Parameter(Mandatory=$false,ParameterSetName='Default')]
+    [System.String]$CondaPath,
 
     [Parameter(Mandatory=$true,ParameterSetName='HelpText')]
     [Alias("h")]
@@ -122,29 +132,48 @@ $PathPresent = Test-PyshimPathPresence -TargetPath $ShimDir -Scopes $AllScopes
 
 if ($PathPresent) {
     Write-Verbose "[$thisScript] Shim directory already present in PATH."
-    return
-}
-
-$ShouldWritePath = $false
-if ($WritePath) {
-    $ShouldWritePath = $true
 } else {
-    $Response = Read-Host "Add '$ShimDir' to your user PATH? [y/N]"
-    if ($Response -and ($Response.Trim() -match '^(y|yes)$')) {
+    $ShouldWritePath = $false
+    if ($WritePath) {
         $ShouldWritePath = $true
+    } else {
+        $Response = Read-Host "Add '$ShimDir' to your user PATH? [y/N]"
+        if ($Response -and ($Response.Trim() -match '^(y|yes)$')) {
+            $ShouldWritePath = $true
+        }
+    }
+
+    if ($ShouldWritePath) {
+        if ($PSCmdlet.ShouldProcess('User PATH','Append shim directory')) {
+            $NewUserPath = Add-PyshimPathEntry -TargetPath $ShimDir -CurrentUserPath $PathScopes.User
+            [Environment]::SetEnvironmentVariable('Path',$NewUserPath,'User')
+            $EnvEntries = $env:Path -split ';'
+            if (-not ($EnvEntries | Where-Object { $_.TrimEnd('\\') -ieq $ShimDir.TrimEnd('\\') })) {
+                $env:Path = ($EnvEntries + $ShimDir | Where-Object { $_ }) -join ';'
+            }
+            Write-Host "Added '$ShimDir' to the user PATH. Restart shells that were already open."
+        }
+    } else {
+        Write-Host "Skipping PATH update. To add it later run:`n  [Environment]::SetEnvironmentVariable('Path',( '{0};' + [Environment]::GetEnvironmentVariable('Path','User')).Trim(';'),'User')" -f $ShimDir
     }
 }
 
-if ($ShouldWritePath) {
-    if ($PSCmdlet.ShouldProcess('User PATH','Append shim directory')) {
-        $NewUserPath = Add-PyshimPathEntry -TargetPath $ShimDir -CurrentUserPath $PathScopes.User
-        [Environment]::SetEnvironmentVariable('Path',$NewUserPath,'User')
-        $EnvEntries = $env:Path -split ';'
-        if (-not ($EnvEntries | Where-Object { $_.TrimEnd('\') -ieq $ShimDir.TrimEnd('\') })) {
-            $env:Path = ($EnvEntries + $ShimDir | Where-Object { $_ }) -join ';'
+if (-not $SkipCondaRefresh) {
+    $ModulePath = Join-Path -Path $ShimDir -ChildPath 'pyshim.psm1'
+    if (-not (Test-Path -LiteralPath $ModulePath)) {
+        Write-Warning "Unable to locate $ModulePath; skipping Conda environment refresh."
+    } else {
+        $RefreshArgs = @{ IgnoreMissing = $true }
+        if ($PSBoundParameters.ContainsKey('CondaPath')) { $RefreshArgs.CondaPath = $CondaPath }
+        if ($PSBoundParameters.ContainsKey('WhatIf')) { $RefreshArgs.WhatIf = $true }
+        if ($PSBoundParameters.ContainsKey('Confirm')) { $RefreshArgs.Confirm = $Confirm }
+        try {
+            Import-Module $ModulePath -DisableNameChecking -Force -ErrorAction Stop -WarningAction SilentlyContinue
+            Refresh-CondaPythons @RefreshArgs
+        } catch {
+            Write-Warning "Conda environment refresh failed: $($_.Exception.Message). Re-run with -SkipCondaRefresh to skip this step."
         }
-        Write-Host "Added '$ShimDir' to the user PATH. Restart shells that were already open."
     }
 } else {
-    Write-Host "Skipping PATH update. To add it later run:`n  [Environment]::SetEnvironmentVariable('Path',( '{0};' + [Environment]::GetEnvironmentVariable('Path','User')).Trim(';'),'User')" -f $ShimDir
+    Write-Verbose 'Skipping Conda environment refresh per -SkipCondaRefresh.'
 }

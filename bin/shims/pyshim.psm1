@@ -591,6 +591,342 @@ Param(
         & "C:\bin\shims\python.bat" --interpreter "$Spec" -- @Args
     }
 
+    function script:Get-PyshimCondaVersionMap {
+        [CmdletBinding()]
+        Param()
+
+        return [ordered]@{
+            'py310' = '3.10'
+            'py311' = '3.11'
+            'py312' = '3.12'
+            'py313' = '3.13'
+            'py314' = '3.14'
+        }
+    }
+
+    function script:Resolve-PyshimCondaExecutable {
+        [CmdletBinding()]
+        Param(
+            [Parameter(Mandatory=$false)]
+            [System.String]$Candidate
+        )
+
+        $SearchOrder = @()
+        if ($Candidate) { $SearchOrder += $Candidate }
+        if ($env:CONDA_EXE) { $SearchOrder += $env:CONDA_EXE }
+
+        $PathHit = $null
+        try {
+            $Command = Get-Command -Name conda -ErrorAction Stop
+            if ($Command -and $Command.Source) {
+                $PathHit = $Command.Source
+            }
+        } catch {
+            $PathHit = $null
+        }
+        if ($PathHit) { $SearchOrder += $PathHit }
+
+        $DefaultUserInstall = Join-Path -Path $env:USERPROFILE -ChildPath 'miniconda3\Scripts\conda.exe'
+        $SearchOrder += $DefaultUserInstall
+
+        foreach ($PathCandidate in $SearchOrder) {
+            if ([string]::IsNullOrWhiteSpace($PathCandidate)) {
+                continue
+            }
+
+            $Expanded = Resolve-Path -LiteralPath $PathCandidate -ErrorAction SilentlyContinue
+            if ($Expanded) {
+                return $Expanded.ProviderPath
+            }
+        }
+
+        return $null
+    }
+
+    function script:Invoke-PyshimCondaCommand {
+        [CmdletBinding()]
+        Param(
+            [Parameter(Mandatory=$true)]
+            [System.String]$CondaExe,
+
+            [Parameter(Mandatory=$true)]
+            [System.String[]]$Arguments
+        )
+
+        Write-Verbose ("[conda] {0}" -f ($Arguments -join ' '))
+        $Output = & $CondaExe @Arguments 2>&1
+        $ExitCode = $LASTEXITCODE
+        if ($ExitCode -ne 0) {
+            $Combined = ($Output | Out-String).Trim()
+            if (-not $Combined) {
+                $Combined = "conda exited with code $ExitCode"
+            }
+            throw $Combined
+        }
+
+        return ($Output | Out-String)
+    }
+
+    function script:Get-PyshimCondaEnvironmentMap {
+        [CmdletBinding()]
+        Param(
+            [Parameter(Mandatory=$true)]
+            [System.String]$CondaExe
+        )
+
+        $EnvListJson = script:Invoke-PyshimCondaCommand -CondaExe $CondaExe -Arguments @('env','list','--json')
+        try {
+            $EnvList = $EnvListJson | ConvertFrom-Json -ErrorAction Stop
+        } catch {
+            throw "Failed to parse conda env list JSON. $_"
+        }
+
+        $ExistingEnvMap = @{}
+        if ($EnvList -and $EnvList.envs) {
+            foreach ($EnvPath in $EnvList.envs) {
+                $Name = [IO.Path]::GetFileName($EnvPath)
+                if (-not [string]::IsNullOrWhiteSpace($Name)) {
+                    $ExistingEnvMap[$Name.ToLower()] = $EnvPath
+                }
+            }
+        }
+
+        return $ExistingEnvMap
+    }
+
+    function Install-CondaPythons {
+        <#
+        .SYNOPSIS
+            Provision Conda environments py310 through py314 with matching Python versions.
+        .DESCRIPTION
+            Reuses the helper shipped alongside the shims so the module can manage the environments
+            directly. Environments are created only when missing or rebuilt when -ForceRecreate is
+            supplied.
+        .PARAMETER CondaPath
+            Explicit path to conda.exe. Falls back to CONDA_EXE, Get-Command lookup, or %USERPROFILE%\miniconda3.
+        .PARAMETER ForceRecreate
+            Remove and rebuild environments even when the requested Python version already matches.
+        .PARAMETER Environment
+            Optional subset of environment names (py310..py314) to manage instead of all defaults.
+        .EXAMPLE
+            Install-CondaPythons
+        .EXAMPLE
+            Install-CondaPythons -CondaPath 'C:\Tools\miniconda3\Scripts\conda.exe' -ForceRecreate
+        #>
+        [CmdletBinding(SupportsShouldProcess=$true,ConfirmImpact='Medium')]
+        Param(
+            [Parameter(Mandatory=$false)]
+            [System.String]$CondaPath,
+
+            [Switch]$ForceRecreate,
+
+            [string[]]$Environment
+        )
+
+        $VersionMap = script:Get-PyshimCondaVersionMap
+        if ($Environment) {
+            $Filtered = [ordered]@{}
+            foreach ($Entry in $Environment) {
+                if ([string]::IsNullOrWhiteSpace($Entry)) {
+                    continue
+                }
+                $Key = $Entry.Trim()
+                if (-not $VersionMap.Contains($Key)) {
+                    Write-Warning "Environment '$Key' is not in the managed pyshim set; skipping."
+                    continue
+                }
+                $Filtered[$Key] = $VersionMap[$Key]
+            }
+            if ($Filtered.Count -eq 0) {
+                throw 'No valid Conda environments were selected for installation.'
+            }
+            $VersionMap = $Filtered
+        }
+
+        $ResolvedConda = script:Resolve-PyshimCondaExecutable -Candidate $CondaPath
+        if (-not $ResolvedConda) {
+            throw 'Unable to locate conda.exe. Install Miniconda and/or supply -CondaPath.'
+        }
+
+        Write-Host "Using conda at $ResolvedConda" -ForegroundColor Cyan
+        Write-Host ("Target environments: {0}" -f ($VersionMap.Keys -join ', ')) -ForegroundColor Cyan
+        if ($ForceRecreate) {
+            Write-Warning 'ForceRecreate requested; existing environments will be rebuilt.'
+        }
+
+        $ExistingEnvMap = script:Get-PyshimCondaEnvironmentMap -CondaExe $ResolvedConda
+
+        foreach ($Entry in $VersionMap.GetEnumerator()) {
+            $EnvName = $Entry.Key
+            $Version = $Entry.Value
+            $Existing = $ExistingEnvMap[$EnvName.ToLower()]
+
+            $NeedsCreation = $true
+            if ($Existing -and -not $ForceRecreate) {
+                try {
+                    $Probe = script:Invoke-PyshimCondaCommand -CondaExe $ResolvedConda -Arguments @('run','-n',$EnvName,'python','-c','import sys; print(sys.version.split()[0])')
+                    $Reported = $Probe.Trim()
+                    if ($Reported.StartsWith($Version)) {
+                        Write-Host "Environment '$EnvName' already matches Python $Reported; skipping." -ForegroundColor Green
+                        $NeedsCreation = $false
+                    } else {
+                        Write-Warning "Environment '$EnvName' reports Python $Reported (expected $Version). Recreating."
+                    }
+                } catch {
+                    Write-Warning "Failed to probe Python version for '$EnvName'. Environment will be recreated. $_"
+                }
+            }
+
+            if ($Existing -and ($ForceRecreate -or $NeedsCreation)) {
+                if ($PSCmdlet.ShouldProcess($EnvName,'Remove existing conda environment')) {
+                    Write-Host "Removing existing environment '$EnvName'" -ForegroundColor Yellow
+                    script:Invoke-PyshimCondaCommand -CondaExe $ResolvedConda -Arguments @('env','remove','-n',$EnvName,'-y') | Out-Null
+                }
+                $NeedsCreation = $true
+            }
+
+            if ($NeedsCreation) {
+                if ($PSCmdlet.ShouldProcess($EnvName,"Create Python $Version environment")) {
+                    Write-Host "Creating environment '$EnvName' (Python $Version)" -ForegroundColor Blue
+                    script:Invoke-PyshimCondaCommand -CondaExe $ResolvedConda -Arguments @('create','-n',$EnvName,"python=$Version",'--yes','--quiet','--no-default-packages') | Out-Null
+                    $Verify = script:Invoke-PyshimCondaCommand -CondaExe $ResolvedConda -Arguments @('run','-n',$EnvName,'python','-V')
+                    Write-Host "Created '$EnvName': $($Verify.Trim())" -ForegroundColor Green
+                }
+            }
+        }
+
+        Write-Host 'Requested Python environments are ready.' -ForegroundColor Green
+    }
+
+    function Remove-CondaPythons {
+        <#
+        .SYNOPSIS
+            Remove the managed py310..py314 Conda environments.
+        .DESCRIPTION
+            Complements Install-CondaPythons by deleting the same interpreter environments. Useful for
+            freeing disk space or rebuilding everything from scratch before reinstalling.
+        .PARAMETER CondaPath
+            Explicit path to conda.exe. Falls back to CONDA_EXE, Get-Command lookup, or %USERPROFILE%\miniconda3.
+        .PARAMETER Environment
+            Optional subset of environment names (py310..py314) to remove instead of the default set.
+        .PARAMETER IgnoreMissing
+            Suppress warnings when a requested environment does not exist.
+        .EXAMPLE
+            Remove-CondaPythons
+        .EXAMPLE
+            Remove-CondaPythons -Environment py312 -IgnoreMissing
+        #>
+        [CmdletBinding(SupportsShouldProcess=$true,ConfirmImpact='Medium')]
+        Param(
+            [Parameter(Mandatory=$false)]
+            [System.String]$CondaPath,
+
+            [string[]]$Environment,
+
+            [Switch]$IgnoreMissing
+        )
+
+        $VersionMap = script:Get-PyshimCondaVersionMap
+        $Targets = @()
+        if ($Environment -and $Environment.Count -gt 0) {
+            foreach ($Entry in $Environment) {
+                if ([string]::IsNullOrWhiteSpace($Entry)) {
+                    continue
+                }
+                $Key = $Entry.Trim()
+                if (-not $VersionMap.Contains($Key)) {
+                    Write-Warning "Environment '$Key' is not in the managed pyshim set; skipping."
+                    continue
+                }
+                $Targets += $Key
+            }
+            if (-not $Targets) {
+                if ($IgnoreMissing) {
+                    Write-Verbose 'No valid Conda environments were selected for removal.'
+                    return
+                }
+                throw 'No valid Conda environments were selected for removal.'
+            }
+        } else {
+            $Targets = $VersionMap.Keys
+        }
+
+        $ResolvedConda = script:Resolve-PyshimCondaExecutable -Candidate $CondaPath
+        if (-not $ResolvedConda) {
+            throw 'Unable to locate conda.exe. Install Miniconda and/or supply -CondaPath.'
+        }
+
+        Write-Host "Using conda at $ResolvedConda" -ForegroundColor Cyan
+        Write-Host ("Removing environments: {0}" -f ($Targets -join ', ')) -ForegroundColor Cyan
+
+        $ExistingEnvMap = script:Get-PyshimCondaEnvironmentMap -CondaExe $ResolvedConda
+
+        foreach ($EnvName in $Targets) {
+            $Lookup = $EnvName.ToLower()
+            if (-not $ExistingEnvMap.ContainsKey($Lookup)) {
+                if ($IgnoreMissing) {
+                    Write-Verbose "Environment '$EnvName' does not exist; skipping removal."
+                } else {
+                    Write-Warning "Environment '$EnvName' does not exist; skipping removal."
+                }
+                continue
+            }
+
+            if ($PSCmdlet.ShouldProcess($EnvName,'Remove conda environment')) {
+                Write-Host "Removing environment '$EnvName'" -ForegroundColor Yellow
+                script:Invoke-PyshimCondaCommand -CondaExe $ResolvedConda -Arguments @('env','remove','-n',$EnvName,'-y') | Out-Null
+                Write-Host "Removed Conda environment '$EnvName'." -ForegroundColor Green
+            }
+        }
+    }
+
+    function Refresh-CondaPythons {
+        <#
+        .SYNOPSIS
+            Remove and recreate the managed py310..py314 Conda environments.
+        .DESCRIPTION
+            Calls Remove-CondaPythons (ignoring missing environments) followed by
+            Install-CondaPythons with -ForceRecreate to ensure each target interpreter
+            is rebuilt from scratch.
+        .PARAMETER CondaPath
+            Explicit path to conda.exe. Falls back to CONDA_EXE, PATH lookup, or %USERPROFILE%\miniconda3.
+        .PARAMETER Environment
+            Optional subset of environment names (py310..py314) to refresh instead of the default set.
+        .PARAMETER IgnoreMissing
+            Suppress warnings when an environment does not exist before removal.
+        .EXAMPLE
+            Refresh-CondaPythons
+        .EXAMPLE
+            Refresh-CondaPythons -Environment py312 -IgnoreMissing
+        #>
+        [CmdletBinding(SupportsShouldProcess=$true,ConfirmImpact='Medium')]
+        Param(
+            [Parameter(Mandatory=$false)]
+            [System.String]$CondaPath,
+
+            [string[]]$Environment,
+
+            [Switch]$IgnoreMissing
+        )
+
+        $RemoveArgs = @{}
+        if ($PSBoundParameters.ContainsKey('CondaPath')) { $RemoveArgs.CondaPath = $CondaPath }
+        if ($Environment) { $RemoveArgs.Environment = $Environment }
+        if ($IgnoreMissing) { $RemoveArgs.IgnoreMissing = $true }
+        if ($PSBoundParameters.ContainsKey('WhatIf')) { $RemoveArgs.WhatIf = $true }
+        if ($PSBoundParameters.ContainsKey('Confirm')) { $RemoveArgs.Confirm = $Confirm }
+
+        Remove-CondaPythons @RemoveArgs
+
+        $InstallArgs = @{ ForceRecreate = $true }
+        if ($PSBoundParameters.ContainsKey('CondaPath')) { $InstallArgs.CondaPath = $CondaPath }
+        if ($Environment) { $InstallArgs.Environment = $Environment }
+        if ($PSBoundParameters.ContainsKey('WhatIf')) { $InstallArgs.WhatIf = $true }
+        if ($PSBoundParameters.ContainsKey('Confirm')) { $InstallArgs.Confirm = $Confirm }
+
+        Install-CondaPythons @InstallArgs
+    }
+
     function Update-Pyshim {
         <#
         .SYNOPSIS
@@ -782,6 +1118,14 @@ Param(
             if ($PSCmdlet.ShouldProcess($Item.FullName,'Delete file')) {
                 Remove-Item -LiteralPath $Item.FullName -Recurse -Force -ErrorAction SilentlyContinue
             }
+        }
+
+        $ProfileScopes = @('AllUsersAllHosts','AllUsersCurrentHost','CurrentUserAllHosts','CurrentUserCurrentHost')
+        try {
+            Write-Verbose 'Attempting to remove pyshim profile hooks via Disable-PyshimProfile.'
+            Disable-PyshimProfile -Scope $ProfileScopes -IncludeWindowsPowerShell -NoBackup -Confirm:$false | Out-Null
+        } catch {
+            Write-Warning "Failed to remove pyshim profile hooks using Disable-PyshimProfile: $($_.Exception.Message)"
         }
 
         if ($InvokerPath) {

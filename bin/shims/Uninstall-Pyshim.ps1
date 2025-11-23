@@ -52,6 +52,127 @@ Param(
         Write-Host $Message -ForegroundColor $Color
     }
 
+    function Remove-StandalonePyshimProfiles {
+        Param(
+            [string[]]$ScopeOrder = @('AllUsersAllHosts','AllUsersCurrentHost','CurrentUserAllHosts','CurrentUserCurrentHost')
+        )
+
+        $SentinelStart = '# >>> pyshim auto-import >>>'
+        $SentinelEnd   = '# <<< pyshim auto-import <<<'
+
+        $ProfileTargets = @()
+        $ProfileMap = [ordered]@{
+            CurrentUserCurrentHost = $PROFILE.CurrentUserCurrentHost
+            CurrentUserAllHosts    = $PROFILE.CurrentUserAllHosts
+            AllUsersCurrentHost    = $PROFILE.AllUsersCurrentHost
+            AllUsersAllHosts       = $PROFILE.AllUsersAllHosts
+        }
+
+        foreach ($ScopeName in $ScopeOrder) {
+            if (-not $ProfileMap.Contains($ScopeName)) { continue }
+            $Path = $ProfileMap[$ScopeName]
+            if ([string]::IsNullOrWhiteSpace($Path)) { continue }
+            $ProfileTargets += [pscustomobject]@{
+                Scope         = $ScopeName
+                Path          = $Path
+                Origin        = 'pwsh'
+                NeedsElevation = ($ScopeName -like 'AllUsers*') -or ($Path -like "$env:ProgramFiles*") -or ($Path -like "$env:WINDIR*")
+            }
+        }
+
+        $UserDocuments = [Environment]::GetFolderPath('MyDocuments')
+        $WinPsUserRoot = Join-Path $UserDocuments 'WindowsPowerShell'
+        $WinPsAllUsersRoot = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0'
+        $LegacyMap = [ordered]@{
+            CurrentUserCurrentHost = Join-Path $WinPsUserRoot 'Microsoft.PowerShell_profile.ps1'
+            CurrentUserAllHosts    = Join-Path $WinPsUserRoot 'profile.ps1'
+            AllUsersCurrentHost    = Join-Path $WinPsAllUsersRoot 'Microsoft.PowerShell_profile.ps1'
+            AllUsersAllHosts       = Join-Path $WinPsAllUsersRoot 'profile.ps1'
+        }
+
+        foreach ($ScopeName in $ScopeOrder) {
+            if (-not $LegacyMap.Contains($ScopeName)) { continue }
+            $Path = $LegacyMap[$ScopeName]
+            if ([string]::IsNullOrWhiteSpace($Path)) { continue }
+            $ProfileTargets += [pscustomobject]@{
+                Scope         = $ScopeName
+                Path          = $Path
+                Origin        = 'WindowsPowerShell'
+                NeedsElevation = ($ScopeName -like 'AllUsers*') -or ($Path -like "$env:ProgramFiles*") -or ($Path -like "$env:WINDIR*")
+            }
+        }
+
+        if (-not $ProfileTargets) {
+            Write-PyshimMessage -Type Info -Message 'No profile files resolved for cleanup.'
+            return
+        }
+
+        $IsElevated = $false
+        try {
+            $Identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+            $Principal = [Security.Principal.WindowsPrincipal]::new($Identity)
+            $IsElevated = $Principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+        } catch {
+            Write-PyshimMessage -Type Warning -Message 'Unable to determine elevation status; proceeding with profile cleanup best-effort.'
+        }
+
+        foreach ($Target in ($ProfileTargets | Sort-Object -Property Path, Origin -Unique)) {
+            $ProfilePath = $Target.Path
+            $ScopeName = $Target.Scope
+            $Origin = $Target.Origin
+            $NeedsElevation = $Target.NeedsElevation
+
+            if ([string]::IsNullOrWhiteSpace($ProfilePath)) { continue }
+            if ($NeedsElevation -and -not $IsElevated) {
+                Write-PyshimMessage -Type Warning -Message "Skipping $Origin $ScopeName profile at $ProfilePath (administrator rights required)."
+                continue
+            }
+            if (-not (Test-Path -LiteralPath $ProfilePath)) {
+                continue
+            }
+
+            $Content = Get-Content -LiteralPath $ProfilePath -Raw
+            if ($Content -eq $null) { continue }
+            if (($Content -notmatch [System.Text.RegularExpressions.Regex]::Escape($SentinelStart)) -or ($Content -notmatch [System.Text.RegularExpressions.Regex]::Escape($SentinelEnd))) {
+                continue
+            }
+
+            $Lines = $Content -split "`r?`n"
+            $StartIndex = [Array]::IndexOf($Lines,$SentinelStart)
+            if ($StartIndex -lt 0) { continue }
+            $EndIndex = [Array]::IndexOf($Lines,$SentinelEnd)
+            if ($EndIndex -lt 0 -or $EndIndex -lt $StartIndex) { continue }
+
+            $RangeStart = $StartIndex
+            if ($RangeStart -gt 0 -and [string]::IsNullOrWhiteSpace($Lines[$RangeStart - 1])) {
+                $RangeStart -= 1
+            }
+
+            $Before = if ($RangeStart -gt 0) { $Lines[0..($RangeStart - 1)] } else { @() }
+            $After = if ($EndIndex -lt ($Lines.Count - 1)) { $Lines[($EndIndex + 1)..($Lines.Count - 1)] } else { @() }
+
+            while ($Before.Count -gt 0 -and [string]::IsNullOrWhiteSpace($Before[-1])) {
+                $Before = if ($Before.Count -gt 1) { $Before[0..($Before.Count - 2)] } else { @() }
+            }
+
+            while ($After.Count -gt 0 -and [string]::IsNullOrWhiteSpace($After[0])) {
+                $After = if ($After.Count -gt 1) { $After[1..($After.Count - 1)] } else { @() }
+            }
+
+            $NewLines = @()
+            if ($Before) { $NewLines += $Before }
+            if ($After) { $NewLines += $After }
+            $NewContent = if ($NewLines) { $NewLines -join "`r`n" } else { '' }
+
+            try {
+                Set-Content -LiteralPath $ProfilePath -Value $NewContent -Encoding utf8
+                Write-PyshimMessage -Type Success -Message "Removed pyshim auto-import from $ProfilePath ($Origin / $ScopeName)."
+            } catch {
+                Write-PyshimMessage -Type Warning -Message "Failed to update $ProfilePath: $($_.Exception.Message)"
+            }
+        }
+    }
+
     function Invoke-StandalonePyshimUninstall {
         Param(
             [Switch]$Force,
@@ -137,6 +258,8 @@ Param(
             Write-PyshimMessage -Type Success -Message "Removed $ShimDir."
         }
 
+        Write-PyshimMessage -Type Action -Message 'Removing pyshim profile hooks.'
+        Remove-StandalonePyshimProfiles
         Write-PyshimMessage -Type Success -Message 'pyshim has been removed.'
     }
 

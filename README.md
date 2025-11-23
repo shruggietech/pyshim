@@ -70,8 +70,7 @@ When you call `python`, pyshim resolves the appropriate interpreter using this p
 ## Install (Recommended)
 
 1. **Download the installer** from [the latest releases](https://github.com/shruggietech/pyshim/releases/latest):
-   - Grab `Install-Pyshim.ps1` (required).
-   - Optionally grab `Install-CondaPythons.ps1` if you want prebuilt Conda envs `py310`–`py314`.
+   - Grab `Install-Pyshim.ps1`. The Conda helper scripts now live inside the installed shims, so no extra download is required.
 
 2. **Run the installer** in an elevated PowerShell window (writes to `C:\bin\shims`):
 
@@ -81,13 +80,15 @@ When you call `python`, pyshim resolves the appropriate interpreter using this p
 
    The script copies the shims to `C:\bin\shims` and adds that directory to your user PATH when it is missing. Skip `-WritePath` if you prefer to be prompted.
 
-3. **(Optional) Provision Conda environments** after the main installer finishes:
+3. **Conda environments refresh automatically** at the end of the installer run. Pass `-SkipCondaRefresh` if you do not want the managed envs recreated on that machine. You can rerun the helpers later from `C:\bin\shims`:
 
    ```powershell
-   powershell.exe -ExecutionPolicy Bypass -File .\Install-CondaPythons.ps1
+   pwsh -ExecutionPolicy Bypass -File C:\bin\shims\Refresh-CondaPythons.ps1
+   pwsh -ExecutionPolicy Bypass -File C:\bin\shims\Install-CondaPythons.ps1 -ForceRecreate
+   pwsh -ExecutionPolicy Bypass -File C:\bin\shims\Remove-CondaPythons.ps1 -IgnoreMissing
    ```
 
-   Supply `-ForceRecreate` to rebuild existing envs or `-CondaPath` if `conda.exe` lives elsewhere.
+   Each helper accepts `-CondaPath` if `conda.exe` lives elsewhere and honors `-WhatIf/-Confirm`.
 
 4. **Auto-load the module in PowerShell** so every shell gets the shim helpers:
 
@@ -147,6 +148,12 @@ By default it grabs the latest release asset and reruns `Install-Pyshim.ps1` for
 - Pass `-Scope AllUsersAllHosts` (and run elevated) to cover background agents or shared build accounts. Add `-IncludeWindowsPowerShell` if you still launch legacy `powershell.exe` shells that need the shim.
 - The cmdlet creates `.pyshim.bak` backups the first time it touches each profile unless you pass `-NoBackup`. Opening profiles with `-NoProfile` skips the block by definition.
 - The inserted code simply checks for `C:\bin\shims\pyshim.psm1` and imports it with `Write-Verbose` logging when anything goes sideways, so your existing profile customizations stay in control.
+
+### Conda Environment Helpers
+
+- Once the module is imported you can run `Install-CondaPythons`, `Remove-CondaPythons`, or `Refresh-CondaPythons` to manage the shared `py310..py314` Conda environments. Each cmdlet accepts `-CondaPath` when auto-detection fails and honors `-WhatIf/-Confirm`.
+- The scripts `Install-CondaPythons.ps1`, `Remove-CondaPythons.ps1`, and `Refresh-CondaPythons.ps1` live in `C:\bin\shims` (mirrored under `tools/` for repository workflows) and simply forward to those cmdlets.
+- `Install-Pyshim.ps1` now runs `Refresh-CondaPythons -IgnoreMissing` by default; pass `-SkipCondaRefresh` to opt out during installation.
 
 ---
 
@@ -352,8 +359,8 @@ Run-WithPython -Spec 'py:3.9' -- -c "import sys; print(sys.version)"
 ## Maintainers: Building the Installer
 
 - Run `pwsh ./tools/New-PyshimInstaller.ps1` whenever the shims change. This regenerates `dist/Install-Pyshim.ps1` with the latest batch files, module, and the bundled `Uninstall-Pyshim.ps1`.
-- Publish `dist/Install-Pyshim.ps1` (and optionally `tools/Install-CondaPythons.ps1`) as release assets so end users can install without cloning the repo.
-- The GitHub workflow `.github/workflows/build-installer.yml` does this automatically when triggered manually or when a release is published. The artifact named `pyshim-tools` includes both scripts.
+- Publish `dist/Install-Pyshim.ps1` as the release asset; the Conda helper scripts ship inside the installer payload.
+- The GitHub workflow `.github/workflows/build-installer.yml` does this automatically when triggered manually or when a release is published. The `pyshim-tools` artifact now only contains `Install-Pyshim.ps1`.
 
 Keep contributor-only notes down here so users don’t confuse the installer generator with the installer itself.
 
