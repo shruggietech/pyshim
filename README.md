@@ -69,25 +69,19 @@ When you call `python`, pyshim resolves the appropriate interpreter using this p
 
 ## Install (Recommended)
 
-1. **Download the installer** from [the latest releases](https://github.com/shruggietech/pyshim/releases/latest):
-   - Grab `Install-Pyshim.ps1`. The Conda helper scripts now live inside the installed shims, so no extra download is required.
+1. **Download the Windows installer** from [the latest releases](https://github.com/shruggietech/pyshim/releases/latest):
+   - Grab `Pyshim.Setup.exe`. The WinForms bootstrapper requires a single UAC approval and bundles the latest shims, module, and helper scripts.
 
-2. **Run the installer** in an elevated PowerShell window (writes to `C:\bin\shims`):
+2. **Run `Pyshim.Setup.exe`** (UAC prompt expected) and pick the actions you want:
+   - Keep `C:\bin\shims` at the front of both the machine and user PATH values.
+   - Copy the shims, refresh the shared Conda environments, and insert the guarded `Enable-PyshimProfile` block for CurrentUser and AllUsers scopes.
+   - The log window mirrors every command so you can see exactly what changed; clear any checkbox to skip that step.
 
-   ```powershell
-   powershell.exe -ExecutionPolicy Bypass -File .\Install-Pyshim.ps1 -WritePath
-   ```
+3. **Re-run the installer anytime** to repair an existing deployment or refresh PATH/profile wiring. The operations are idempotent, so nothing is duplicated.
 
-   That one command copies the shims into place, keeps `C:\bin\shims` on your PATH, refreshes the managed Conda environments, and inserts the guarded `Enable-PyshimProfile` block so every pwsh session imports the module automatically. Skip `-WritePath` if you prefer to be prompted.
+### Manual Install (PowerShell)
 
-3. **Optional flags**
-   - `-SkipCondaRefresh` — prevents the installer from recreating the shared `py310..py314` Conda environments.
-   - `-WhatIf` / `-Confirm:$false` — dry-run or suppress prompts when automating.
-   - Rerun the installer anytime; it is idempotent and simply re-copies the latest shims.
-
-### Manual Install (Advanced)
-
-Only take this path when you cannot run the signed installer (locked-down servers, offline images, etc.). You are responsible for the work the installer normally automates:
+Only take this path when you cannot run the GUI installer (locked-down servers, offline images, etc.). You are responsible for the work the installer normally automates:
 
 1. **Stage the payload** – Download the latest release asset or clone the repo, then copy `python.bat`, `pip.bat`, `pythonw.bat`, `pyshim.psm1`, the Conda helper scripts, and `Uninstall-Pyshim.ps1` into `C:\bin\shims` (create the directory first).
 2. **Wire up PATH** – Ensure `C:\bin\shims` sits at the end of your user PATH at minimum (`[Environment]::SetEnvironmentVariable('Path', '<existing>;C:\bin\shims','User')`). Update the current `$env:Path` so open shells can see it immediately.
@@ -96,6 +90,26 @@ Only take this path when you cannot run the signed installer (locked-down server
 5. **Refresh managed Conda envs (optional)** – Run `Refresh-CondaPythons -IgnoreMissing` or `Install-CondaPythons` from the shim directory if you rely on the curated `py310..py314` interpreters. Supply `-CondaPath` when detection fails.
 
 Following every step above reproduces the installer’s behaviour; skipping any of them means you are also skipping that piece of automation.
+
+Need a headless option for CI or fleet tools? Use `dist/Install-Pyshim.ps1 -WritePath -Confirm:$false`, which performs the same actions as the GUI but stays scriptable.
+
+#### PowerShell Installer Caveats
+
+- Even though the script is Authenticode-signed, Windows still honors the local execution policy. If your policy blocks unsigned scripts, start by unblocking and verifying the file:
+
+   ```powershell
+   Unblock-File .\Install-Pyshim.ps1
+   Get-AuthenticodeSignature .\Install-Pyshim.ps1 | Format-List Status,StatusMessage,SignerCertificate
+   ```
+
+- Run the installer from an elevated PowerShell 7 session so it can touch `C:\bin\shims`, machine PATH, and AllUsers profiles:
+
+   ```powershell
+   Set-ExecutionPolicy -Scope Process Bypass -Force
+   pwsh -NoLogo -Command "powershell.exe -ExecutionPolicy Bypass -File .\Install-Pyshim.ps1 -WritePath -Confirm:\$false"
+   ```
+
+- When automating, pair `-WritePath` with `-Confirm:$false` and consider `-SkipCondaRefresh` if your build agents provision Conda separately.
 
 ---
 
@@ -343,13 +357,28 @@ Run-WithPython -Spec 'py:3.9' -- -c "import sys; print(sys.version)"
 
 ---
 
-## Maintainers: Building the Installer
+## Maintainers: Building the Installers
 
-- Run `pwsh ./tools/New-PyshimInstaller.ps1` whenever the shims change. This regenerates `dist/Install-Pyshim.ps1` with the latest batch files, module, and the bundled `Uninstall-Pyshim.ps1`.
-- Publish `dist/Install-Pyshim.ps1` as the release asset; the Conda helper scripts ship inside the installer payload.
-- The GitHub workflow `.github/workflows/build-installer.yml` does this automatically when triggered manually or when a release is published. The `pyshim-tools` artifact now only contains `Install-Pyshim.ps1`.
+- Run both payload generators whenever `bin/shims` changes so the script and GUI installers stay in sync:
 
-Keep contributor-only notes down here so users don’t confuse the installer generator with the installer itself.
+   ```powershell
+   pwsh ./tools/New-PyshimInstaller.ps1 -Force
+   pwsh ./tools/New-PyshimSetupPayload.ps1 -Force
+   ```
+
+- Publish *two* installer artifacts per release:
+   1. `dist/Install-Pyshim.ps1` — the unattended PowerShell installer that automation still uses.
+   2. `installer/Pyshim.Setup/bin/Release/net8.0-windows/win-x64/publish/Pyshim.Setup.exe` — the WinForms GUI that end users run.
+
+- Build the GUI installer with `dotnet publish installer/Pyshim.Setup/Pyshim.Setup.csproj -c Release -r win-x64 -p:PublishSingleFile=true --self-contained false`. The output folder already contains the manifest that forces elevation.
+
+- GitHub Actions workflow `.github/workflows/build-installer.yml` now runs both payload generators, publishes the GUI installer, signs both artifacts, and uploads them to releases automatically.
+- Store the code-signing certificate as repository secrets so the workflow can sign unattended:
+   - `WINDOWS_CODESIGN_PFX` — base64-encoded `.pfx` containing the code-signing certificate + private key.
+   - `WINDOWS_CODESIGN_PASSWORD` — password protecting the PFX.
+   The workflow uses the local composite action `.github/actions/sign-installers` to wrap `signtool` + `Set-AuthenticodeSignature` with those inputs.
+
+Keep contributor-only notes down here so users don’t confuse the installer generators with the installers themselves.
 
 ---
 

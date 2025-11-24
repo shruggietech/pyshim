@@ -19,11 +19,28 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
       - name: Ensure dist directory exists
         run: New-Item -ItemType Directory -Path ./dist -Force | Out-Null
 
-      - name: Generate installer
+      - name: Generate script installer payload
         run: ./tools/New-PyshimInstaller.ps1 -Force -OutputPath ./dist/Install-Pyshim.ps1
+
+      - name: Generate GUI installer payload
+        run: ./tools/New-PyshimSetupPayload.ps1 -Force
+
+      - name: Publish GUI installer
+        run: dotnet publish installer/Pyshim.Setup/Pyshim.Setup.csproj -c Release -r win-x64 -p:PublishSingleFile=true --self-contained false -o installer/Pyshim.Setup/publish
+
+      - name: Sign installers
+        uses: ./.github/actions/sign-installers
+        with:
+          pfx-base64: ${{ secrets.WINDOWS_CODESIGN_PFX }}
+          pfx-password: ${{ secrets.WINDOWS_CODESIGN_PASSWORD }}
 
       - name: Upload installer artifact
         if: github.event_name == 'workflow_dispatch'
@@ -32,6 +49,7 @@ jobs:
           name: pyshim-tools
           path: |
             dist/Install-Pyshim.ps1
+            installer/Pyshim.Setup/publish/Pyshim.Setup.exe
 
       - name: Attach installer to release
         if: github.event_name == 'release'
@@ -39,3 +57,4 @@ jobs:
         with:
           files: |
             dist/Install-Pyshim.ps1
+            installer/Pyshim.Setup/publish/Pyshim.Setup.exe

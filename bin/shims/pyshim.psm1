@@ -335,21 +335,23 @@ Param(
         }
 
         if ($AppliedScopesByOrigin.Count -gt 0) {
-            $ScopesToPrune = [System.Collections.Generic.HashSet[string]]::new()
+            $ScopesToPrune = @()
             foreach ($OriginEntry in $AppliedScopesByOrigin.GetEnumerator()) {
                 foreach ($ScopeRecorded in $OriginEntry.Value) {
                     $RecordedIndex = [Array]::IndexOf($ScopeOrder,$ScopeRecorded)
                     if ($RecordedIndex -ge 0 -and $RecordedIndex -lt ($ScopeOrder.Count - 1)) {
                         for ($k = $RecordedIndex + 1; $k -lt $ScopeOrder.Count; $k++) {
-                            [void]$ScopesToPrune.Add($ScopeOrder[$k])
+                            $CandidateScope = $ScopeOrder[$k]
+                            if ($ScopesToPrune -notcontains $CandidateScope) {
+                                $ScopesToPrune += $CandidateScope
+                            }
                         }
                     }
                 }
             }
 
             if ($ScopesToPrune.Count -gt 0) {
-                $ScopesArray = $ScopesToPrune.ToArray()
-                Disable-PyshimProfile -Scope $ScopesArray -IncludeWindowsPowerShell:$IncludeWindowsPowerShell -NoBackup:$NoBackup -Confirm:$false | Out-Null
+                Disable-PyshimProfile -Scope $ScopesToPrune -IncludeWindowsPowerShell:$IncludeWindowsPowerShell -NoBackup:$NoBackup -Confirm:$false | Out-Null
             }
         }
     }

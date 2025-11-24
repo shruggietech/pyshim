@@ -1,0 +1,29 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.5.2.0
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "installer", "installer", "{1860D2E4-5C43-71D5-59A5-599A4DE1DF67}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Pyshim.Setup", "installer\Pyshim.Setup\Pyshim.Setup.csproj", "{71169B6E-2342-AB42-2708-76F806E38B4F}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{71169B6E-2342-AB42-2708-76F806E38B4F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{71169B6E-2342-AB42-2708-76F806E38B4F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{71169B6E-2342-AB42-2708-76F806E38B4F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{71169B6E-2342-AB42-2708-76F806E38B4F}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{71169B6E-2342-AB42-2708-76F806E38B4F} = {1860D2E4-5C43-71D5-59A5-599A4DE1DF67}
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {6424B0BC-4406-4042-B16E-5132F7C3382B}
+	EndGlobalSection
+EndGlobal

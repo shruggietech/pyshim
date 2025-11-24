@@ -30,5 +30,8 @@ bin/shims/python.env
 bin/shims/python.nopersist
 bin/shims/python@*.env
 
+installer/Pyshim.Setup/bin/
+installer/Pyshim.Setup/obj/
+
 # constructed prompt output
 prompt/Prompt-Code-Reference.md

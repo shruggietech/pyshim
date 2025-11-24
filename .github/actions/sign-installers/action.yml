@@ -1,0 +1,38 @@
+name: Sign installers
+description: Sign the PowerShell and GUI installers using a provided PFX certificate.
+inputs:
+  pfx-base64:
+    description: Base64-encoded PFX payload containing the code-signing certificate.
+    required: true
+  pfx-password:
+    description: Password used to unlock the PFX payload.
+    required: true
+  script-path:
+    description: Path to the PowerShell installer to sign.
+    default: dist/Install-Pyshim.ps1
+  gui-path:
+    description: Path to the GUI installer executable to sign.
+    default: installer/Pyshim.Setup/publish/Pyshim.Setup.exe
+runs:
+  using: composite
+  steps:
+    - name: Sign installers with signtool and Authenticode
+      shell: pwsh
+      run: |
+        $pfxBase64 = '${{ inputs.pfx-base64 }}'
+        $pfxPassword = '${{ inputs.pfx-password }}'
+        if ([string]::IsNullOrWhiteSpace($pfxBase64) -or [string]::IsNullOrWhiteSpace($pfxPassword)) {
+            throw 'Both pfx-base64 and pfx-password inputs are required for signing.'
+        }
+
+        $certPath = Join-Path $env:RUNNER_TEMP 'codesign.pfx'
+        [IO.File]::WriteAllBytes($certPath,[Convert]::FromBase64String($pfxBase64))
+
+        $signtool = (Get-Command signtool.exe -ErrorAction Stop).Source
+        $guiPath = '${{ inputs.gui-path }}'
+        & $signtool sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com /f $certPath /p $pfxPassword $guiPath
+
+        $securePassword = ConvertTo-SecureString $pfxPassword -AsPlainText -Force
+        $cert = Get-PfxCertificate -FilePath $certPath -Password $securePassword
+        $scriptPath = '${{ inputs.script-path }}'
+        Set-AuthenticodeSignature -FilePath $scriptPath -Certificate $cert -TimestampServer http://timestamp.digicert.com | Out-Null
