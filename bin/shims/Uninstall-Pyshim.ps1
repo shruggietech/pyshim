@@ -168,7 +168,7 @@ Param(
                 Set-Content -LiteralPath $ProfilePath -Value $NewContent -Encoding utf8
                 Write-PyshimMessage -Type Success -Message "Removed pyshim auto-import from $ProfilePath ($Origin / $ScopeName)."
             } catch {
-                Write-PyshimMessage -Type Warning -Message "Failed to update $ProfilePath: $($_.Exception.Message)"
+                Write-PyshimMessage -Type Warning -Message "Failed to update $($ProfilePath): $($_.Exception.Message)"
             }
         }
     }
