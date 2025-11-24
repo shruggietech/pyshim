@@ -15,10 +15,6 @@
     Import-Module 'C:\bin\shims\pyshim.psm1' -DisableNameChecking -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
     Recommended import statement (mirrors the profile snippet the installer wires up) that avoids verb
     warnings and other benign noise while making the pyshim cmdlets available for the session.
-
-.EXAMPLE
-    Import-Module 'C:\bin\shims\pyshim.psm1' -DisableNameChecking -ArgumentList -Help
-    Shows the module help text without importing the cmdlets.
 #>
 [CmdletBinding(SupportsShouldProcess=$true,ConfirmImpact='High',DefaultParameterSetName='Default')]
 Param(
@@ -551,6 +547,64 @@ Param(
                 Write-Host "Removed pyshim auto-import from $ProfilePath ($Origin / $ScopeName)." -ForegroundColor Green
             }
         }
+    }
+
+    function Repair-PyshimProfile {
+        <#
+        .SYNOPSIS
+            Recreate the pyshim auto-import block with the current import flags.
+        .DESCRIPTION
+            Removes any existing pyshim sentinel block from the targeted profiles and immediately
+            re-adds the canonical snippet that imports pyshim with -DisableNameChecking and the
+            silenced warning/error actions. Useful when an older release left behind an import line
+            that still triggers the unapproved verb warning at shell startup.
+        .PARAMETER Scope
+            One or more profile scopes to repair. Defaults to CurrentUserAllHosts and
+            CurrentUserCurrentHost. Accepts the same values as Enable-PyshimProfile.
+        .PARAMETER IncludeWindowsPowerShell
+            Also process the legacy Windows PowerShell profile paths.
+        .PARAMETER NoBackup
+            Skip creating .pyshim.bak files before editing existing profiles.
+        .EXAMPLE
+            Repair-PyshimProfile -Scope AllUsersAllHosts
+        .EXAMPLE
+            Repair-PyshimProfile -IncludeWindowsPowerShell
+        #>
+        [CmdletBinding(SupportsShouldProcess=$true,ConfirmImpact='Medium')]
+        Param(
+            [Parameter(Mandatory=$false)]
+            [ValidateSet('CurrentUserCurrentHost','CurrentUserAllHosts','AllUsersCurrentHost','AllUsersAllHosts')]
+            [string[]]$Scope = @('CurrentUserAllHosts','CurrentUserCurrentHost'),
+
+            [Switch]$IncludeWindowsPowerShell,
+
+            [Switch]$NoBackup
+        )
+
+        $ScopeLabel = ($Scope -join ', ')
+        if (-not $PSCmdlet.ShouldProcess($ScopeLabel,'Repair pyshim auto-import block(s)')) {
+            return
+        }
+
+        $DisableArgs = @{
+            Scope = $Scope
+            IncludeWindowsPowerShell = $IncludeWindowsPowerShell
+            NoBackup = $NoBackup
+            Confirm = $false
+        }
+        if ($PSBoundParameters.ContainsKey('WhatIf')) { $DisableArgs.WhatIf = $true }
+
+        Disable-PyshimProfile @DisableArgs | Out-Null
+
+        $EnableArgs = @{
+            Scope = $Scope
+            IncludeWindowsPowerShell = $IncludeWindowsPowerShell
+            NoBackup = $NoBackup
+        }
+        if ($PSBoundParameters.ContainsKey('WhatIf')) { $EnableArgs.WhatIf = $true }
+        if ($PSBoundParameters.ContainsKey('Confirm')) { $EnableArgs.Confirm = $Confirm }
+
+        Enable-PyshimProfile @EnableArgs
     }
 
     function Set-AppPython {

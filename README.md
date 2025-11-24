@@ -78,37 +78,24 @@ When you call `python`, pyshim resolves the appropriate interpreter using this p
    powershell.exe -ExecutionPolicy Bypass -File .\Install-Pyshim.ps1 -WritePath
    ```
 
-   The script copies the shims to `C:\bin\shims` and adds that directory to your user PATH when it is missing. Skip `-WritePath` if you prefer to be prompted.
+   That one command copies the shims into place, keeps `C:\bin\shims` on your PATH, refreshes the managed Conda environments, and inserts the guarded `Enable-PyshimProfile` block so every pwsh session imports the module automatically. Skip `-WritePath` if you prefer to be prompted.
 
-3. **Conda environments refresh automatically** at the end of the installer run. Pass `-SkipCondaRefresh` if you do not want the managed envs recreated on that machine. You can rerun the helpers later from `C:\bin\shims`:
+3. **Optional flags**
+   - `-SkipCondaRefresh` — prevents the installer from recreating the shared `py310..py314` Conda environments.
+   - `-WhatIf` / `-Confirm:$false` — dry-run or suppress prompts when automating.
+   - Rerun the installer anytime; it is idempotent and simply re-copies the latest shims.
 
-   ```powershell
-   pwsh -ExecutionPolicy Bypass -File C:\bin\shims\Refresh-CondaPythons.ps1
-   pwsh -ExecutionPolicy Bypass -File C:\bin\shims\Install-CondaPythons.ps1 -ForceRecreate
-   pwsh -ExecutionPolicy Bypass -File C:\bin\shims\Remove-CondaPythons.ps1 -IgnoreMissing
-   ```
+### Manual Install (Advanced)
 
-   Each helper accepts `-CondaPath` if `conda.exe` lives elsewhere and honors `-WhatIf/-Confirm`.
+Only take this path when you cannot run the signed installer (locked-down servers, offline images, etc.). You are responsible for the work the installer normally automates:
 
-4. **Auto-load the module in PowerShell** so every shell gets the shim helpers:
+1. **Stage the payload** – Download the latest release asset or clone the repo, then copy `python.bat`, `pip.bat`, `pythonw.bat`, `pyshim.psm1`, the Conda helper scripts, and `Uninstall-Pyshim.ps1` into `C:\bin\shims` (create the directory first).
+2. **Wire up PATH** – Ensure `C:\bin\shims` sits at the end of your user PATH at minimum (`[Environment]::SetEnvironmentVariable('Path', '<existing>;C:\bin\shims','User')`). Update the current `$env:Path` so open shells can see it immediately.
+3. **Trust the module for the session** – In PowerShell 7 run `Import-Module 'C:\bin\shims\pyshim.psm1' -DisableNameChecking -ErrorAction SilentlyContinue -WarningAction SilentlyContinue` to load the helper cmdlets.
+4. **Persist the auto-import** – Execute `Enable-PyshimProfile` (add `-Scope AllUsersAllHosts` and run elevated if you need system-wide coverage, `-IncludeWindowsPowerShell` for legacy shells). This inserts the guarded import block that the installer normally writes.
+5. **Refresh managed Conda envs (optional)** – Run `Refresh-CondaPythons -IgnoreMissing` or `Install-CondaPythons` from the shim directory if you rely on the curated `py310..py314` interpreters. Supply `-CondaPath` when detection fails.
 
-   ```powershell
-   Import-Module 'C:\bin\shims\pyshim.psm1' -DisableNameChecking -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
-   Enable-PyshimProfile
-   ```
-
-   This appends a guarded import block to your current-user profiles without touching existing content. Add `-Scope AllUsersAllHosts` and run in an elevated pwsh if you want it system-wide. Restart open terminals afterward so they pick up the refreshed PATH.
-
-### Manual install (advanced)
-
-If you prefer to copy files yourself, follow these steps instead of the installer:
-
-1. Create `C:\bin\shims` yourself.
-2. Copy `python.bat`, `pip.bat`, `pythonw.bat`, `pyshim.psm1`, and `Uninstall-Pyshim.ps1` into that folder.
-3. Put `C:\bin\shims` at the front of your user PATH.
-4. Import the module from your PowerShell profile (or run `Enable-PyshimProfile` after importing the module once).
-
-The single-file installer automates all of these steps, so prefer it for real machines.
+Following every step above reproduces the installer’s behaviour; skipping any of them means you are also skipping that piece of automation.
 
 ---
 

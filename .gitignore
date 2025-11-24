@@ -29,3 +29,6 @@ yarn-error.log*
 bin/shims/python.env
 bin/shims/python.nopersist
 bin/shims/python@*.env
+
+# constructed prompt output
+prompt/Prompt-Code-Reference.md
