@@ -42,16 +42,21 @@ Param(
             [System.String]$CurrentUserPath
         )
 
+        $NormalizedTarget = $TargetPath.TrimEnd('\\')
         $SplitPaths = @()
         if ($CurrentUserPath) {
             $SplitPaths = $CurrentUserPath -split ';'
         }
 
-        if (-not ($SplitPaths | Where-Object { $_.TrimEnd('\\') -ieq $TargetPath.TrimEnd('\\') })) {
-            $SplitPaths = @($SplitPaths | Where-Object { $_ }) + $TargetPath
+        $Filtered = @()
+        foreach ($Entry in $SplitPaths) {
+            if (-not $Entry) { continue }
+            if ($Entry.TrimEnd('\\') -ieq $NormalizedTarget) { continue }
+            $Filtered += $Entry
         }
 
-        return ($SplitPaths | Where-Object { $_ }) -join ';'
+        $Ordered = @($TargetPath) + $Filtered
+        return ($Ordered | Where-Object { $_ }) -join ';'
     }
 
     function Get-PyshimPathScopes {
@@ -277,10 +282,7 @@ EAAAVW5pbnN0YWxsLVB5c2hpbS5wczFQSwUGAAAAAAUABQAhAQAAHhYAAAAA
         if ($PSCmdlet.ShouldProcess('User PATH','Append shim directory')) {
             $NewUserPath = Add-PyshimPathEntry -TargetPath $ShimDir -CurrentUserPath $PathScopes.User
             [Environment]::SetEnvironmentVariable('Path',$NewUserPath,'User')
-            $EnvEntries = $env:Path -split ';'
-            if (-not ($EnvEntries | Where-Object { $_.TrimEnd('\\') -ieq $ShimDir.TrimEnd('\\') })) {
-                $env:Path = ($EnvEntries + $ShimDir | Where-Object { $_ }) -join ';'
-            }
+            $env:Path = Add-PyshimPathEntry -TargetPath $ShimDir -CurrentUserPath $env:Path
             Write-Host "Added 'C:\bin\shims' to the user PATH. Restart existing shells." -ForegroundColor Green
         }
         exit 0
