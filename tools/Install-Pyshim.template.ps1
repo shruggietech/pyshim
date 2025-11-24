@@ -30,178 +30,194 @@ Param(
     [Alias('h')]
     [Switch]$Help
 )
+#______________________________________________________________________________
+## Declare Functions
 
-if ($Help -or ($PSCmdlet.ParameterSetName -eq 'HelpText')) {
-    Get-Help -Name $MyInvocation.MyCommand.Path -Full
-    exit 0
-}
+    function Write-PyshimMessage {
+        Param(
+            [Parameter(Mandatory=$true)]
+            [ValidateSet('Info','Action','Success','Warning','Error')]
+            [string]$Type,
+
+            [Parameter(Mandatory=$true)]
+            [string]$Message
+        )
+
+        switch ($Type) {
+            'Info'    { $Color = 'Cyan' }
+            'Action'  { $Color = 'Blue' }
+            'Success' { $Color = 'Green' }
+            'Warning' { $Color = 'Yellow' }
+            'Error'   { $Color = 'Red' }
+        }
+
+        Write-Host $Message -ForegroundColor $Color
+    }
+
+    function Add-PyshimPathEntry {
+        Param(
+            [Parameter(Mandatory=$true)]
+            [System.String]$TargetPath,
+
+            [Parameter(Mandatory=$true)]
+            [System.String]$CurrentUserPath
+        )
+
+        $SplitPaths = @()
+        if ($CurrentUserPath) {
+            $SplitPaths = $CurrentUserPath -split ';'
+        }
+
+        if (-not ($SplitPaths | Where-Object { $_.TrimEnd('\\') -ieq $TargetPath.TrimEnd('\\') })) {
+            $SplitPaths = @($SplitPaths | Where-Object { $_ }) + $TargetPath
+        }
+
+        return ($SplitPaths | Where-Object { $_ }) -join ';'
+    }
+
+    function Get-PyshimPathScopes {
+        Param()
+
+        return [PSCustomObject]@{
+            Process = $env:Path
+            User    = [Environment]::GetEnvironmentVariable('Path','User')
+            Machine = [Environment]::GetEnvironmentVariable('Path','Machine')
+        }
+    }
+
+    function Test-PyshimPathPresence {
+        Param(
+            [Parameter(Mandatory=$true)]
+            [System.String]$TargetPath,
+
+            [Parameter(Mandatory=$true)]
+            [System.String[]]$Scopes
+        )
+
+        foreach ($Scope in $Scopes) {
+            if (-not $Scope) {
+                continue
+            }
+
+            $Entries = $Scope -split ';'
+            if ($Entries | Where-Object { $_.TrimEnd('\\') -ieq $TargetPath.TrimEnd('\\') }) {
+                return $true
+            }
+        }
+
+        return $false
+    }
+
+    function Expand-PyshimArchive {
+        Param(
+            [Parameter(Mandatory=$true)]
+            [System.String]$DestinationPath
+        )
+
+        $Bytes = [Convert]::FromBase64String($EmbeddedArchive)
+        $ZipPath = [IO.Path]::GetTempFileName()
+        try {
+            [IO.File]::WriteAllBytes($ZipPath,$Bytes)
+            [IO.Compression.ZipFile]::ExtractToDirectory($ZipPath,$DestinationPath,$true)
+        } finally {
+            if (Test-Path -LiteralPath $ZipPath) {
+                Remove-Item -LiteralPath $ZipPath -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+
+#______________________________________________________________________________
+## Embedded Archive Block
 
 $EmbeddedArchive = @'
 __PYSHIM_EMBEDDED_ARCHIVE__
 '@
 
-Add-Type -AssemblyName System.IO.Compression.FileSystem
+#______________________________________________________________________________
+## Declare Variables and Load Assemblies
 
-function Write-PyshimMessage {
-    Param(
-        [Parameter(Mandatory=$true)]
-        [ValidateSet('Info','Action','Success','Warning','Error')]
-        [string]$Type,
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
 
-        [Parameter(Mandatory=$true)]
-        [string]$Message
-    )
+    $ShimDir = 'C:\bin\shims'
+    $WorkingRoot = Join-Path -Path ([IO.Path]::GetTempPath()) -ChildPath ("pyshim_" + [Guid]::NewGuid().ToString('N'))
 
-    switch ($Type) {
-        'Info'    { $Color = 'Cyan' }
-        'Action'  { $Color = 'Blue' }
-        'Success' { $Color = 'Green' }
-        'Warning' { $Color = 'Yellow' }
-        'Error'   { $Color = 'Red' }
+#______________________________________________________________________________
+## Execute Operations
+
+    # Catch help text requests
+    if ($Help -or ($PSCmdlet.ParameterSetName -eq 'HelpText')) {
+        Get-Help -Name $MyInvocation.MyCommand.Path -Full
+        exit 0
     }
 
-    Write-Host $Message -ForegroundColor $Color
-}
+    $Null = New-Item -ItemType Directory -Path $WorkingRoot -Force
 
-function Add-PyshimPathEntry {
-    Param(
-        [Parameter(Mandatory=$true)]
-        [System.String]$TargetPath,
+    Write-PyshimMessage -Type Info -Message 'Starting pyshim installation.'
+    Write-PyshimMessage -Type Info -Message "Target directory: $ShimDir"
+    Write-PyshimMessage -Type Action -Message 'Extracting embedded payload to a temporary staging folder.'
 
-        [Parameter(Mandatory=$true)]
-        [System.String]$CurrentUserPath
-    )
-
-    $SplitPaths = @()
-    if ($CurrentUserPath) {
-        $SplitPaths = $CurrentUserPath -split ';'
-    }
-
-    if (-not ($SplitPaths | Where-Object { $_.TrimEnd('\\') -ieq $TargetPath.TrimEnd('\\') })) {
-        $SplitPaths = @($SplitPaths | Where-Object { $_ }) + $TargetPath
-    }
-
-    return ($SplitPaths | Where-Object { $_ }) -join ';'
-}
-
-function Get-PyshimPathScopes {
-    Param()
-
-    return [PSCustomObject]@{
-        Process = $env:Path
-        User    = [Environment]::GetEnvironmentVariable('Path','User')
-        Machine = [Environment]::GetEnvironmentVariable('Path','Machine')
-    }
-}
-
-function Test-PyshimPathPresence {
-    Param(
-        [Parameter(Mandatory=$true)]
-        [System.String]$TargetPath,
-
-        [Parameter(Mandatory=$true)]
-        [System.String[]]$Scopes
-    )
-
-    foreach ($Scope in $Scopes) {
-        if (-not $Scope) {
-            continue
-        }
-
-        $Entries = $Scope -split ';'
-        if ($Entries | Where-Object { $_.TrimEnd('\\') -ieq $TargetPath.TrimEnd('\\') }) {
-            return $true
-        }
-    }
-
-    return $false
-}
-
-function Expand-PyshimArchive {
-    Param(
-        [Parameter(Mandatory=$true)]
-        [System.String]$DestinationPath
-    )
-
-    $Bytes = [Convert]::FromBase64String($EmbeddedArchive)
-    $ZipPath = [IO.Path]::GetTempFileName()
     try {
-        [IO.File]::WriteAllBytes($ZipPath,$Bytes)
-        [IO.Compression.ZipFile]::ExtractToDirectory($ZipPath,$DestinationPath,$true)
+        Expand-PyshimArchive -DestinationPath $WorkingRoot
+        $PayloadSource = $WorkingRoot
+        Write-PyshimMessage -Type Success -Message "Payload unpacked to $WorkingRoot"
+
+        if (-not (Test-Path -LiteralPath $ShimDir)) {
+            if ($PSCmdlet.ShouldProcess($ShimDir,'Create shim directory')) {
+                Write-PyshimMessage -Type Action -Message "Creating shim directory at $ShimDir"
+                New-Item -ItemType Directory -Path $ShimDir -Force | Out-Null
+            }
+        } else {
+            Write-PyshimMessage -Type Info -Message "Shim directory already exists at $ShimDir"
+        }
+
+        if ($PSCmdlet.ShouldProcess($ShimDir,'Copy embedded shims')) {
+            Write-PyshimMessage -Type Action -Message "Copying shim payload into $ShimDir"
+            Copy-Item -Path (Join-Path -Path $PayloadSource -ChildPath '*') -Destination $ShimDir -Recurse -Force
+            Write-PyshimMessage -Type Success -Message 'Shim files refreshed.'
+        }
     } finally {
-        if (Test-Path -LiteralPath $ZipPath) {
-            Remove-Item -LiteralPath $ZipPath -Force -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath $WorkingRoot) {
+            Remove-Item -LiteralPath $WorkingRoot -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
-}
 
-$ShimDir = 'C:\bin\shims'
-$WorkingRoot = Join-Path -Path ([IO.Path]::GetTempPath()) -ChildPath ("pyshim_" + [Guid]::NewGuid().ToString('N'))
-$Null = New-Item -ItemType Directory -Path $WorkingRoot -Force
+    $PathScopes = Get-PyshimPathScopes
+    $AllScopes = @($PathScopes.Process,$PathScopes.User,$PathScopes.Machine)
+    $PathPresent = Test-PyshimPathPresence -TargetPath $ShimDir -Scopes $AllScopes
 
-Write-PyshimMessage -Type Info -Message 'Starting pyshim installation.'
-Write-PyshimMessage -Type Info -Message "Target directory: $ShimDir"
-Write-PyshimMessage -Type Action -Message 'Extracting embedded payload to a temporary staging folder.'
-
-try {
-    Expand-PyshimArchive -DestinationPath $WorkingRoot
-    $PayloadSource = $WorkingRoot
-    Write-PyshimMessage -Type Success -Message "Payload unpacked to $WorkingRoot"
-
-    if (-not (Test-Path -LiteralPath $ShimDir)) {
-        if ($PSCmdlet.ShouldProcess($ShimDir,'Create shim directory')) {
-            Write-PyshimMessage -Type Action -Message "Creating shim directory at $ShimDir"
-            New-Item -ItemType Directory -Path $ShimDir -Force | Out-Null
-        }
-    } else {
-        Write-PyshimMessage -Type Info -Message "Shim directory already exists at $ShimDir"
+    if ($PathPresent) {
+        Write-PyshimMessage -Type Success -Message "C:\bin\shims already present in PATH. Installation complete."
+        return
     }
 
-    if ($PSCmdlet.ShouldProcess($ShimDir,'Copy embedded shims')) {
-        Write-PyshimMessage -Type Action -Message "Copying shim payload into $ShimDir"
-        Copy-Item -Path (Join-Path -Path $PayloadSource -ChildPath '*') -Destination $ShimDir -Recurse -Force
-        Write-PyshimMessage -Type Success -Message 'Shim files refreshed.'
-    }
-} finally {
-    if (Test-Path -LiteralPath $WorkingRoot) {
-        Remove-Item -LiteralPath $WorkingRoot -Recurse -Force -ErrorAction SilentlyContinue
-    }
-}
-
-$PathScopes = Get-PyshimPathScopes
-$AllScopes = @($PathScopes.Process,$PathScopes.User,$PathScopes.Machine)
-$PathPresent = Test-PyshimPathPresence -TargetPath $ShimDir -Scopes $AllScopes
-
-if ($PathPresent) {
-    Write-PyshimMessage -Type Success -Message "C:\bin\shims already present in PATH. Installation complete."
-    return
-}
-
-$ShouldWritePath = $false
-if ($WritePath) {
-    $ShouldWritePath = $true
-} else {
-    $Response = Read-Host "Add 'C:\bin\shims' to your user PATH? [y/N]"
-    if ($Response -and ($Response.Trim() -match '^(y|yes)$')) {
+    $ShouldWritePath = $false
+    if ($WritePath) {
         $ShouldWritePath = $true
-    }
-}
-
-if ($ShouldWritePath) {
-    if ($PSCmdlet.ShouldProcess('User PATH','Append shim directory')) {
-        $NewUserPath = Add-PyshimPathEntry -TargetPath $ShimDir -CurrentUserPath $PathScopes.User
-        [Environment]::SetEnvironmentVariable('Path',$NewUserPath,'User')
-        $EnvEntries = $env:Path -split ';'
-        if (-not ($EnvEntries | Where-Object { $_.TrimEnd('\\') -ieq $ShimDir.TrimEnd('\\') })) {
-            $env:Path = ($EnvEntries + $ShimDir | Where-Object { $_ }) -join ';'
+    } else {
+        $Response = Read-Host "Add 'C:\bin\shims' to your user PATH? [y/N]"
+        if ($Response -and ($Response.Trim() -match '^(y|yes)$')) {
+            $ShouldWritePath = $true
         }
-        Write-PyshimMessage -Type Success -Message "Added 'C:\bin\shims' to the user PATH. Restart existing shells."
-        Write-PyshimMessage -Type Success -Message 'pyshim installation complete.'
     }
-    return
-} else {
-    Write-PyshimMessage -Type Warning -Message "Skipped PATH update. To add it later run:"
-    Write-Host ("    [Environment]::SetEnvironmentVariable('Path',( '{0};' + [Environment]::GetEnvironmentVariable('Path','User')).Trim(';'),'User')" -f $ShimDir) -ForegroundColor Yellow
-    Write-PyshimMessage -Type Success -Message 'pyshim installation complete.'
-    return
-}
+
+    if ($ShouldWritePath) {
+        if ($PSCmdlet.ShouldProcess('User PATH','Append shim directory')) {
+            $NewUserPath = Add-PyshimPathEntry -TargetPath $ShimDir -CurrentUserPath $PathScopes.User
+            [Environment]::SetEnvironmentVariable('Path',$NewUserPath,'User')
+            $EnvEntries = $env:Path -split ';'
+            if (-not ($EnvEntries | Where-Object { $_.TrimEnd('\\') -ieq $ShimDir.TrimEnd('\\') })) {
+                $env:Path = ($EnvEntries + $ShimDir | Where-Object { $_ }) -join ';'
+            }
+            Write-PyshimMessage -Type Success -Message "Added 'C:\bin\shims' to the user PATH. Restart existing shells."
+            Write-PyshimMessage -Type Success -Message 'pyshim installation complete.'
+        }
+        return
+    } else {
+        Write-PyshimMessage -Type Warning -Message "Skipped PATH update. To add it later run:"
+        Write-Host ("    [Environment]::SetEnvironmentVariable('Path',( '{0};' + [Environment]::GetEnvironmentVariable('Path','User')).Trim(';'),'User')" -f $ShimDir) -ForegroundColor Yellow
+        Write-PyshimMessage -Type Success -Message 'pyshim installation complete.'
+        return
+    }
+
+#______________________________________________________________________________
+## End of script

@@ -29,3 +29,6 @@ if (-not (Test-Path -LiteralPath $ShimScript)) {
 }
 
 & $ShimScript @PSBoundParameters
+
+#______________________________________________________________________________
+## End of script

@@ -43,7 +43,7 @@ Param(
         .EXAMPLE
             Use-Python -Spec 'conda:tools'   # session-only
         #>
-        [CmdletBinding()]
+        [CmdletBinding(SupportsShouldProcess=$false,ConfirmImpact='None',DefaultParameterSetName='Default')]
         Param(
             [Parameter(Mandatory=$false)]
             [System.String]$Spec,
@@ -90,7 +90,7 @@ Param(
         .SYNOPSIS
             Make shim ignore python.env without deleting it.
         #>
-        [CmdletBinding()]
+        [CmdletBinding(SupportsShouldProcess=$false,ConfirmImpact='None',DefaultParameterSetName='Default')]
         Param()
         $marker = 'C:\bin\shims\python.nopersist'
         if (-not (Test-Path $marker)) { New-Item -ItemType File -Path $marker | Out-Null }
@@ -102,7 +102,7 @@ Param(
         .SYNOPSIS
             Re-enable reading python.env.
         #>
-        [CmdletBinding()]
+        [CmdletBinding(SupportsShouldProcess=$false,ConfirmImpact='None',DefaultParameterSetName='Default')]
         Param()
         $marker = 'C:\bin\shims\python.nopersist'
         if (Test-Path $marker) { Remove-Item -LiteralPath $marker -Force }
@@ -130,7 +130,7 @@ Param(
         .EXAMPLE
             Enable-PyshimProfile -Scope AllUsersAllHosts -IncludeWindowsPowerShell
         #>
-        [CmdletBinding(SupportsShouldProcess=$true)]
+        [CmdletBinding(SupportsShouldProcess=$true,ConfirmImpact='High',DefaultParameterSetName='Default')]
         Param(
             [Parameter(Mandatory=$false)]
             [ValidateSet('CurrentUserCurrentHost','CurrentUserAllHosts','AllUsersCurrentHost','AllUsersAllHosts')]
@@ -374,7 +374,7 @@ Param(
         .EXAMPLE
             Disable-PyshimProfile -Scope AllUsersAllHosts -IncludeWindowsPowerShell
         #>
-        [CmdletBinding(SupportsShouldProcess=$true)]
+        [CmdletBinding(SupportsShouldProcess=$true,ConfirmImpact='High',DefaultParameterSetName='Default')]
         Param(
             [Parameter(Mandatory=$false)]
             [ValidateSet('CurrentUserCurrentHost','CurrentUserAllHosts','AllUsersCurrentHost','AllUsersAllHosts')]
@@ -634,7 +634,7 @@ Param(
         .EXAMPLE
             Run-WithPython -Spec 'py:3.11' -- -m pip --version
         #>
-        [CmdletBinding()]
+        [CmdletBinding(SupportsShouldProcess=$false,ConfirmImpact='None',DefaultParameterSetName='Default')]
         Param(
             [Parameter(Mandatory=$true)]
             [System.String]$Spec,
@@ -646,7 +646,7 @@ Param(
     }
 
     function script:Get-PyshimCondaVersionMap {
-        [CmdletBinding()]
+        [CmdletBinding(SupportsShouldProcess=$false,ConfirmImpact='None',DefaultParameterSetName='Default')]
         Param()
 
         return [ordered]@{
@@ -659,7 +659,7 @@ Param(
     }
 
     function script:Resolve-PyshimCondaExecutable {
-        [CmdletBinding()]
+        [CmdletBinding(SupportsShouldProcess=$false,ConfirmImpact='None',DefaultParameterSetName='Default')]
         Param(
             [Parameter(Mandatory=$false)]
             [System.String]$Candidate
@@ -698,7 +698,7 @@ Param(
     }
 
     function script:Invoke-PyshimCondaCommand {
-        [CmdletBinding()]
+        [CmdletBinding(SupportsShouldProcess=$false,ConfirmImpact='None',DefaultParameterSetName='Default')]
         Param(
             [Parameter(Mandatory=$true)]
             [System.String]$CondaExe,
@@ -722,7 +722,7 @@ Param(
     }
 
     function script:Get-PyshimCondaEnvironmentMap {
-        [CmdletBinding()]
+        [CmdletBinding(SupportsShouldProcess=$false,ConfirmImpact='None',DefaultParameterSetName='Default')]
         Param(
             [Parameter(Mandatory=$true)]
             [System.String]$CondaExe
@@ -767,7 +767,7 @@ Param(
         .EXAMPLE
             Install-CondaPythons -CondaPath 'C:\Tools\miniconda3\Scripts\conda.exe' -ForceRecreate
         #>
-        [CmdletBinding(SupportsShouldProcess=$true,ConfirmImpact='Medium')]
+        [CmdletBinding(SupportsShouldProcess=$true,ConfirmImpact='Medium',DefaultParameterSetName='Default')]
         Param(
             [Parameter(Mandatory=$false)]
             [System.String]$CondaPath,
@@ -870,7 +870,7 @@ Param(
         .EXAMPLE
             Remove-CondaPythons -Environment py312 -IgnoreMissing
         #>
-        [CmdletBinding(SupportsShouldProcess=$true,ConfirmImpact='Medium')]
+        [CmdletBinding(SupportsShouldProcess=$true,ConfirmImpact='Medium',DefaultParameterSetName='Default')]
         Param(
             [Parameter(Mandatory=$false)]
             [System.String]$CondaPath,
@@ -953,7 +953,7 @@ Param(
         .EXAMPLE
             Refresh-CondaPythons -Environment py312 -IgnoreMissing
         #>
-        [CmdletBinding(SupportsShouldProcess=$true,ConfirmImpact='Medium')]
+        [CmdletBinding(SupportsShouldProcess=$true,ConfirmImpact='Medium',DefaultParameterSetName='Default')]
         Param(
             [Parameter(Mandatory=$false)]
             [System.String]$CondaPath,
@@ -999,7 +999,7 @@ Param(
         .EXAMPLE
             Update-Pyshim -WritePath -Tag 'v0.1.1-alpha'
         #>
-        [CmdletBinding(SupportsShouldProcess=$true,ConfirmImpact='Medium')]
+        [CmdletBinding(SupportsShouldProcess=$true,ConfirmImpact='Medium',DefaultParameterSetName='Default')]
         Param(
             [Parameter(Mandatory=$false)]
             [System.String]$Tag,
@@ -1105,8 +1105,9 @@ Param(
         .EXAMPLE
             Uninstall-Pyshim -Force
         #>
-        [CmdletBinding(SupportsShouldProcess=$true,ConfirmImpact='High')]
+        [CmdletBinding(SupportsShouldProcess=$true,ConfirmImpact='High',DefaultParameterSetName='Default')]
         Param(
+            [Parameter(Mandatory=$false)]
             [Switch]$Force,
 
             [Parameter(Mandatory=$false)]

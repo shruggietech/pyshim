@@ -4,6 +4,18 @@
 .DESCRIPTION
     Keeps repository tooling compatible by launching the script that ships with the
     installed shims, ensuring releases and local runs share the same logic.
+.PARAMETER CondaPath
+    Explicit path to conda.exe. Falls back to CONDA_EXE, PATH lookup, or %USERPROFILE%\miniconda3.
+.PARAMETER ForceRecreate
+    Remove and rebuild environments even when the requested Python version already matches.
+.PARAMETER Environment
+    Optional subset of environment names (py310..py314) to manage instead of the default set.
+.PARAMETER Help
+    Display detailed help for this script.
+.EXAMPLE
+    .\Install-CondaPythons.ps1
+
+    Creates py310..py314 environments using the detected conda installation.
 #>
 [CmdletBinding(SupportsShouldProcess=$true,ConfirmImpact='Medium',DefaultParameterSetName='Default')]
 Param(
@@ -29,3 +41,6 @@ if (-not (Test-Path -LiteralPath $ShimScript)) {
 }
 
 & $ShimScript @PSBoundParameters
+
+#______________________________________________________________________________
+## End of script

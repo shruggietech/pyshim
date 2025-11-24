@@ -32,6 +32,19 @@ Param(
 ## Declare Functions
 
     function Write-PyshimMessage {
+        <#
+        .SYNOPSIS
+            Write a color-coded message to the host.
+        .DESCRIPTION
+            Outputs a message to the host with color coding based on the message type.
+        .PARAMETER Type
+            The type of message to write (Info, Action, Success, Warning, Error).
+        .PARAMETER Message
+            The message text to write.
+        .EXAMPLE
+            Write-PyshimMessage -Type Info -Message 'This is an informational message.'
+        #>
+        [CmdletBinding(SupportsShouldProcess=$false,ConfirmImpact='None',DefaultParameterSetName='Default')]
         Param(
             [Parameter(Mandatory=$true)]
             [ValidateSet('Info','Action','Success','Warning','Error')]
@@ -53,7 +66,22 @@ Param(
     }
 
     function Remove-StandalonePyshimProfiles {
+        <#
+        .SYNOPSIS
+            Remove pyshim auto-import entries from all PowerShell profiles.
+        .DESCRIPTION
+            Scans all PowerShell profile files for pyshim auto-import entries and removes them.
+        .PARAMETER ScopeOrder
+            An ordered list of profile scopes to process. Defaults to all scopes in standard order.
+            (CurrentUserCurrentHost, CurrentUserAllHosts, AllUsersCurrentHost, AllUsersAllHosts)
+        .EXAMPLE
+            Remove-StandalonePyshimProfiles
+
+            Removes pyshim auto-import entries from all PowerShell profiles.
+        #>
+        [CmdletBinding(SupportsShouldProcess=$true,ConfirmImpact='High',DefaultParameterSetName='Default')]
         Param(
+            [Parameter(Mandatory=$false)]
             [string[]]$ScopeOrder = @('AllUsersAllHosts','AllUsersCurrentHost','CurrentUserAllHosts','CurrentUserCurrentHost')
         )
 
@@ -174,8 +202,26 @@ Param(
     }
 
     function Invoke-StandalonePyshimUninstall {
+        <#
+        .SYNOPSIS
+            Uninstall pyshim by removing shims and cleaning up environment variables.
+        .DESCRIPTION
+            This function removes pyshim files from the shim directory, updates the user PATH,
+            and removes pyshim auto-import entries from PowerShell profiles.
+        .PARAMETER Force
+            Force removal even if unexpected files are present.
+        .PARAMETER InvokerPath
+            The path of the script invoking this uninstall function. If provided, this script will not delete itself immediately but will schedule a cleanup job.
+        .EXAMPLE
+            Invoke-StandalonePyshimUninstall -Force
+
+            Uninstalls pyshim, forcing removal of unexpected files.
+        #>
+        [CmdletBinding(SupportsShouldProcess=$false,ConfirmImpact='None',DefaultParameterSetName='Default')]
         Param(
+            [Parameter(Mandatory=$false)]
             [Switch]$Force,
+
             [Parameter(Mandatory=$false)]
             [System.String]$InvokerPath
         )
