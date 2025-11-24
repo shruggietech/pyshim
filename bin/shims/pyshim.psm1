@@ -646,6 +646,16 @@ Param(
     }
 
     function script:Get-PyshimCondaVersionMap {
+        <#
+        .SYNOPSIS
+            Return the managed Conda environment names mapped to their target Python versions.
+        .DESCRIPTION
+            Provides a centralized lookup so every cmdlet shares the same py310..py314 to version
+            mapping when creating, refreshing, or removing environments.
+        .EXAMPLE
+            script:Get-PyshimCondaVersionMap
+            Returns the ordered dictionary used by Install-/Remove-/Refresh-CondaPythons.
+        #>
         [CmdletBinding(SupportsShouldProcess=$false,ConfirmImpact='None',DefaultParameterSetName='Default')]
         Param()
 
@@ -659,6 +669,18 @@ Param(
     }
 
     function script:Resolve-PyshimCondaExecutable {
+        <#
+        .SYNOPSIS
+            Locate conda.exe using a deterministic search order.
+        .DESCRIPTION
+            Evaluates an explicit candidate path, CONDA_EXE, Get-Command, and common install
+            locations, returning the fully resolved filesystem path when a match is found.
+        .PARAMETER Candidate
+            Optional explicit path to probe first before falling back to discovery heuristics.
+        .EXAMPLE
+            script:Resolve-PyshimCondaExecutable -Candidate 'C:\Tools\Miniconda3\Scripts\conda.exe'
+            Returns the provided path when it exists, otherwise continues searching other locations.
+        #>
         [CmdletBinding(SupportsShouldProcess=$false,ConfirmImpact='None',DefaultParameterSetName='Default')]
         Param(
             [Parameter(Mandatory=$false)]
@@ -698,6 +720,20 @@ Param(
     }
 
     function script:Invoke-PyshimCondaCommand {
+        <#
+        .SYNOPSIS
+            Execute conda.exe with the supplied arguments and surface failures as exceptions.
+        .DESCRIPTION
+            Runs conda commands with verbose logging, captures stdout/stderr, and throws when the
+            process exits non-zero so callers can react without parsing command output themselves.
+        .PARAMETER CondaExe
+            Fully qualified path to conda.exe to execute.
+        .PARAMETER Arguments
+            Argument array passed directly to conda (e.g., `env list --json`).
+        .EXAMPLE
+            script:Invoke-PyshimCondaCommand -CondaExe $Conda -Arguments @('env','list','--json')
+            Returns the raw JSON emitted by `conda env list --json`.
+        #>
         [CmdletBinding(SupportsShouldProcess=$false,ConfirmImpact='None',DefaultParameterSetName='Default')]
         Param(
             [Parameter(Mandatory=$true)]
@@ -722,6 +758,18 @@ Param(
     }
 
     function script:Get-PyshimCondaEnvironmentMap {
+        <#
+        .SYNOPSIS
+            Build a lookup of existing Conda environments by name.
+        .DESCRIPTION
+            Calls `conda env list --json`, parses the response, and returns a dictionary keyed by
+            lowercase environment name to its absolute path for quick existence checks.
+        .PARAMETER CondaExe
+            Path to conda.exe that should be used to query the local environment list.
+        .EXAMPLE
+            script:Get-PyshimCondaEnvironmentMap -CondaExe $Conda
+            Provides the map consumed by Install-/Remove-CondaPythons when reconciling envs.
+        #>
         [CmdletBinding(SupportsShouldProcess=$false,ConfirmImpact='None',DefaultParameterSetName='Default')]
         Param(
             [Parameter(Mandatory=$true)]
